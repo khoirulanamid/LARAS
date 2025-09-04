@@ -20,7 +20,6 @@ function pickDurationSeconds(instruction:string,fallback=60){
 }
 
 type MixProfile = "film"|"podcast"|"ads";
-
 type Character = {
   display_name: string;
   role: "Protagonist"|"Sidekick"|"Antagonist"|"Supporting";
@@ -29,35 +28,85 @@ type Character = {
   clothing?: string; accessories?: string; character_id: string;
 };
 
+// ===== Split helper: pecah scene menjadi beberapa potongan max 8 detik
+const MAX_SCENE_SEC = 8;
+function splitScenesMax8(full: any) {
+  const scenes = full?.scenes ?? [];
+  let out: any[] = [];
+  scenes.forEach((sc: any) => {
+    const total = Math.max(1, Number(sc.seconds||0));
+    if (total <= MAX_SCENE_SEC) { out.push(sc); return; }
+    // butuh pecah:
+    const parts = Math.ceil(total / MAX_SCENE_SEC);
+    const base = Math.floor(total / parts);
+    let remainder = total - base * parts;
+    for (let i=0;i<parts;i++){
+      const sec = base + (remainder>0?1:0);
+      remainder = Math.max(0, remainder-1);
+      const label = sc.name || `Scene ${sc.index}`;
+      const name = `${label} (bagian ${i+1}/${parts})`;
+      out.push({
+        ...sc,
+        name,
+        seconds: sec,
+        // kecilkan sedikit detail jika perlu, tapi biarkan kamera/lighting tetap sama
+      });
+    }
+  });
+
+  // Re-index ulang setelah split
+  out = out.map((s, i)=>({...s, index: i+1}));
+  return out;
+}
+
+// ===== Per-scene panel builder: turunkan JSON global jadi JSON per scene
+function buildPerSceneJSONs(full: any) {
+  const baseHeader = {
+    version: full.version,
+    schema: full.schema,
+    intent: full.intent,
+    consistency: full.consistency,
+    global: full.global,
+    characters: full.characters,
+    narrative: { total_seconds: full?.narrative?.total_seconds ?? 0 },
+    output: full.output,
+    vendor: full.vendor
+  };
+  const scenes = splitScenesMax8(full);
+  // hasil per scene: objek yang hanya berisi 1 scene
+  const arr = scenes.map((sc: any) => ({
+    title: `Scene ${sc.index} — ${sc.name || ""} (${sc.seconds}s)`,
+    obj: { ...baseHeader, scenes: [sc] }
+  }));
+  return arr;
+}
+
 export default function SmartLarasCinematicPro(){
   // ==== FORM STATE ====
-  const [style, setStyle] = useState<StyleKey>("Marvel");
+  const [style, setStyle] = useState<StyleKey>("Cartoon");
   const [resolution, setResolution] = useState<"4K"|"8K">("4K");
-  const [fps, setFps] = useState<30|60>(60);
+  const [fps, setFps] = useState<30|60>(30);
   const [aspect, setAspect] = useState<typeof ARS[number]>("16:9");
   const [mix, setMix] = useState<MixProfile>("film");
-
   const [scenes, setScenes] = useState<number>(6);
-  const [instruction, setInstruction] = useState("Buat animasi 1 menit, anak pemandu kebun binatang futuristik, gajah robot & singa api, sinematik, green screen portrait.");
+  const [instruction, setInstruction] = useState("Buat film kartun 2 menit tentang anak kucing yang belajar berbagi mainan; ceria, ramah anak, 16:9.");
   const [modeAman, setModeAman] = useState(true);
 
   const [characters, setCharacters] = useState<Character[]>([
-    { display_name:"Raka", role:"Protagonist", age:"10", gender:"male",
-      facial_features:"ceria, ekspresif", eyes:"mata bulat cokelat",
-      hair:"rambut pendek hitam", clothing:"jaket petualang anak", accessories:"headset mic",
-      character_id:rid("char") },
-    { display_name:"GajahBot", role:"Sidekick", design:"gajah mekanik futuristik, armor berkilau, mata biru neon", character_id:rid("char") },
-    { display_name:"Singa Api", role:"Antagonist", design:"singa dengan surai api menyala, aura kuat", character_id:rid("char") }
+    { display_name:"Milo", role:"Protagonist", age:"6", gender:"other",
+      facial_features:"mata besar ceria", hair:"bulu halus oren", clothing:"kaos biru",
+      accessories:"kalung lonceng", character_id:rid("char") }
   ]);
 
   // ==== OUTPUT / STATUS ====
-  const [jsonOut, setJsonOut] = useState<string>("");
+  const [jsonOut, setJsonOut] = useState<string>("");             // full JSON (v2.5)
+  const [perScene, setPerScene] = useState<Array<{title:string,obj:any}>>([]); // per-scene hasil split
   const [busy, setBusy] = useState<"idle"|"local"|"ai">("idle");
   const [error, setError] = useState<string>("");
 
   // ==== LOCALSTORAGE (auto save/load) ====
   useEffect(()=>{ // load
-    const raw = localStorage.getItem("laras_state_v2_5"); if(!raw) return;
+    const raw = localStorage.getItem("laras_state_v2_5_split"); if(!raw) return;
     try{
       const s = JSON.parse(raw);
       setStyle(s.style ?? style); setResolution(s.resolution ?? resolution); setFps(s.fps ?? fps);
@@ -69,12 +118,12 @@ export default function SmartLarasCinematicPro(){
   },[]);
   useEffect(()=>{ // save
     const snapshot = { style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters };
-    localStorage.setItem("laras_state_v2_5", JSON.stringify(snapshot));
+    localStorage.setItem("laras_state_v2_5_split", JSON.stringify(snapshot));
   },[style,resolution,fps,aspect,mix,scenes,instruction,modeAman,characters]);
 
   // ==== HELPERS ====
   const lang = useMemo(()=>detectLanguage(instruction),[instruction]);
-  const totalSec = useMemo(()=>pickDurationSeconds(instruction, 60),[instruction]);
+  const totalSec = useMemo(()=>pickDurationSeconds(instruction, 120),[instruction]); // default 2 menit
   const fpsNum = fps === 60 ? 60 : 30;
   const resPx = resolution==="8K" ? "7680x4320" : "3840x2160";
 
@@ -85,26 +134,24 @@ export default function SmartLarasCinematicPro(){
     // minimal 3 detik
     return base.map(w=>Math.max(3, Math.round((w/sum)*total)));
   }
-
   function safetyLists(enabled:boolean){
     if(!enabled) return { do:["alur natural","transisi halus","ekspresi sesuai emosi","proporsi wajah konsisten"], dont:["distorsi","noise berat","glitch teks"] };
     return { do:["ramah anak","hindari jumpscare","tone positif","ekspresi lembut","transisi halus"],
              dont:["kekerasan","darah","tema dewasa","bahasa kasar","hewan tersakiti"] };
   }
 
-  // Kamera preset singkat untuk variasi otomatis
   const CAMERA_PALETTE = [
-    { angle:"wide",   movement:"crane down, dolly-in", lens:"35mm", dof:"shallow fg sharp bg soft", framing:"establishing" },
-    { angle:"medium", movement:"tracking",              lens:"40mm anamorphic", dof:"medium",       framing:"OTS" },
-    { angle:"close-up", movement:"dolly-in",           lens:"85mm", dof:"very shallow",             framing:"portrait" },
-    { angle:"bird view", movement:"drone",             lens:"24mm", dof:"deep",                     framing:"top" },
-    { angle:"low angle", movement:"dolly-zoom",        lens:"50mm", dof:"shallow",                  framing:"hero" },
-    { angle:"medium", movement:"handheld subtle",      lens:"35mm", dof:"medium",                   framing:"dialogue" },
+    { angle:"wide",   movement:"crane down, dolly-in", lens:"30mm toon", dof:"deep",         framing:"establishing" },
+    { angle:"medium", movement:"tracking",             lens:"35mm",      dof:"medium",       framing:"OTS" },
+    { angle:"close-up", movement:"dolly-in",           lens:"85mm",      dof:"very shallow", framing:"portrait" },
+    { angle:"low angle", movement:"dolly-zoom",        lens:"50mm",      dof:"shallow",      framing:"hero" },
+    { angle:"medium", movement:"handheld subtle",      lens:"35mm",      dof:"medium",       framing:"dialogue" },
+    { angle:"bird view", movement:"drone",             lens:"24mm",      dof:"deep",         framing:"top" },
   ];
 
   function buildLocalDraft(): LarasJSON {
     const profile = STYLE_PROFILES[style];
-    const deisgnId = rid("design");
+    const designId = rid("design");
     const seed = String(Math.floor(Math.random()*1_000_000));
     const seconds = distribute(scenes, totalSec);
     const safe = safetyLists(modeAman);
@@ -115,7 +162,6 @@ export default function SmartLarasCinematicPro(){
       palette: profile.palette,
       lens_default: profile.lens_default
     };
-
     const globalAudio = {
       mix_profile: mix,
       music_global: profile.music_global,
@@ -123,44 +169,23 @@ export default function SmartLarasCinematicPro(){
       voiceover: {
         language: lang,
         tone: lang==="id-ID" ? "narasi anak jelas, ekspresif, sesuai emosi" : "clear kid narration, expressive",
-        pace: lang==="id-ID" ? "±125 wpm (sesuaikan durasi)" : "±125 wpm (match duration)"
+        pace: lang==="id-ID" ? "±110–125 wpm (sesuaikan durasi)" : "±110–125 wpm (match duration)"
       }
     };
 
     const scenesArr = Array.from({length: scenes}, (_,i)=>{
       const cam = CAMERA_PALETTE[i % CAMERA_PALETTE.length];
       const sec = seconds[i];
-      // micro/environment defaults by style:
-      const env = (style==="Real Film")
-        ? { location:"kebun binatang futuristik (real film)", weather:"clear with haze", textures:["wet pavement reflections","steel rail texture","glass glare"], props:["holographic sign","ticket gate"] }
-        : { location:"kebun binatang futuristik", weather:"sunny", textures:["neon glow","dust motes","soft fog"], props:["robotic gate","info panel"] };
-
-      const lighting = (style==="Marvel"||style==="Real Film")
-        ? { key:"directional warm", fill:"soft neutral", rim:"strong cool", volumetric:true }
-        : (style==="Pixar"||style==="Cartoon")
-        ? { key:"soft warm", fill:"gentle", rim:"subtle", volumetric:true }
-        : { key:"stylized key", fill:"anime soft", rim:"bright", volumetric:true };
-
+      const env = { location:"taman bermain ceria", weather:"cerah", textures:["rumput hijau","langit biru","awan lembut"], props:["mainan","ayunan","ember pasir"] };
+      const lighting = { key:"soft warm", fill:"gentle", rim:"subtle", volumetric:true };
       const charRefs = characters.map(c=>({ref:c.character_id, visible:true, notes:"keep outfit/logo/colors"}));
-
-      const label = ["Pembukaan","Pengantar","Perkembangan","Klimaks","Resolusi","Penutup"][i] || `Adegan ${i+1}`;
+      const label = ["Intro","Build Up","Conflict","Climax","Resolution","Outro"][i] || `Scene ${i+1}`;
       const dialogue = lang==="id-ID"
-        ? `(${label}) Narator menjelaskan dengan ekspresi sesuai adegan.`
+        ? `(${label}) Narator menjelaskan dengan emosi sesuai adegan.`
         : `(${label}) Narrator explains with emotion matching the beat.`;
-
-      const musicCue = (style==="Marvel") ? "heroic build"
-                    : (style==="Pixar") ? "warm playful"
-                    : (style==="Anime") ? "anime swell"
-                    : (style==="Cartoon") ? "comedy light"
-                    : "filmic pulse";
-
-      const sfx = (style==="Marvel"||style==="Real Film")
-        ? ["footsteps foley","cloth rustle","robotic hum","crowd ambience"]
-        : ["soft steps","playful whoosh","ambient park","robot beep"];
-
-      const micro = (style==="Real Film")
-        ? ["subtle wind on hair", "tiny lens dust glints", "distant birds", "city bokeh flicker"]
-        : ["sparkle dust", "neon flicker", "penguin chatter afar"];
+      const music = "playful / comedy light";
+      const sfx = ["soft steps","toy squeak","slide whistle","ambient park"];
+      const micro = ["bunga bergoyang","awan bergerak","kilau matahari lembut"];
 
       return {
         index: i+1,
@@ -170,14 +195,12 @@ export default function SmartLarasCinematicPro(){
         camera: cam,
         environment: env,
         lighting,
-        action: lang==="id-ID"
-          ? "Gerakan tubuh natural (napas naik-turun, kedipan, rambut/aksesoris bergerak). Interaksi fisik nyata."
-          : "Natural body motion (breathing, blinking, hair/cloth motion). Real physical interactions.",
-        expressions: lang==="id-ID" ? "selaras emosi adegan" : "match scene emotion",
+        action: "Gerakan natural (napas, kedipan, kain/bulu bergerak). Interaksi fisik nyata dengan mainan/lingkungan.",
+        expressions: "selaras emosi adegan",
         gestures: ["wave","head nod","eye blink"],
         lipsync: "dialogue",
         dialogue,
-        music_cue: musicCue,
+        music_cue: music,
         sfx,
         micro_details: micro
       };
@@ -189,7 +212,7 @@ export default function SmartLarasCinematicPro(){
       intent: "cinematic_storytelling",
       consistency: {
         lock: true,
-        design_id: deisgnId,
+        design_id: designId,
         seed,
         look_lock: { face:true, body:true, clothes:true, colors:true }
       },
@@ -198,7 +221,7 @@ export default function SmartLarasCinematicPro(){
         audio: globalAudio,
         safety: safe,
         output: {
-          resolution: resPx,
+          resolution: resolution==="8K" ? "7680x4320" : "3840x2160",
           fps: fpsNum,
           container: "mp4",
           audio_channels: "stereo"
@@ -208,11 +231,11 @@ export default function SmartLarasCinematicPro(){
       scenes: scenesArr,
       narrative: {
         logline: lang==="id-ID"
-          ? "Video multi-adegan sinematik dengan konsistensi karakter sempurna."
-          : "Multi-scene cinematic video with perfect character consistency.",
+          ? "Film kartun multi-adegan sinematik dengan konsistensi karakter sempurna."
+          : "Multi-scene cartoon film with perfect character consistency.",
         total_seconds: totalSec
       },
-      output: { // untuk kompatibilitas lama (beberapa vendor baca dari sini)
+      output: {
         mode: "video",
         aspect_ratio: aspect,
         fps: fpsNum,
@@ -228,21 +251,39 @@ export default function SmartLarasCinematicPro(){
     return obj;
   }
 
+  function refreshPerSceneFromFull(fullObj: any){
+    const arr = buildPerSceneJSONs(fullObj);
+    setPerScene(arr);
+  }
+
   async function generateLocal(){
     setError(""); setBusy("local");
-    try{ const draft = buildLocalDraft(); setJsonOut(JSON.stringify(draft,null,2)); }
-    catch(e:any){ setError(e?.message||"Local generator failed"); }
-    finally{ setBusy("idle"); }
+    try{
+      const draft = buildLocalDraft();
+      setJsonOut(JSON.stringify(draft,null,2));
+      refreshPerSceneFromFull(draft);
+    }catch(e:any){
+      setError(e?.message||"Local generator failed");
+    }finally{ setBusy("idle"); }
   }
+
   async function generateWithAI(){
     setError(""); setBusy("ai");
     try{
       const draft = buildLocalDraft();
       const { enhanced } = await enhanceWithAI({ instruction, draft });
-      const json = typeof enhanced==="string" ? enhanced : JSON.stringify(enhanced,null,2);
-      setJsonOut(json);
-    }catch(e:any){ setError(e?.message||"AI Boost failed"); }
-    finally{ setBusy("idle"); }
+      const full = typeof enhanced==="string" ? JSON.parse(enhanced) : enhanced;
+      setJsonOut(JSON.stringify(full,null,2));
+      refreshPerSceneFromFull(full);
+    }catch(e:any){
+      setError(e?.message||"AI Boost failed");
+    }finally{ setBusy("idle"); }
+  }
+
+  function downloadTextAs(filename: string, content: string, type="application/json"){
+    const blob=new Blob([content],{type}); const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=filename;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }
 
   // ==== UI ====
@@ -251,17 +292,14 @@ export default function SmartLarasCinematicPro(){
       <div className="mx-auto max-w-6xl p-4">
         <header className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ v2.5</h1>
-            <p className="text-xs opacity-70">Multi-scene • Konsistensi karakter • Kamera/Lighting/Audio per adegan • 4K/8K</p>
+            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ v2.5 (Split ≤ 8s/scene)</h1>
+            <p className="text-xs opacity-70">Per scene JSON terpisah & siap disalin. Scene otomatis dipecah menjadi maksimal 8 detik.</p>
           </div>
           <div className="flex gap-2">
             <button disabled={!jsonOut} onClick={()=>navigator.clipboard.writeText(jsonOut)}
-              className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Copy JSON</button>
-            <button disabled={!jsonOut} onClick={()=>{
-              const blob=new Blob([jsonOut],{type:"application/json"});
-              const url=URL.createObjectURL(blob); const a=document.createElement("a");
-              a.href=url; a.download=`LARAS_${Date.now()}.json`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-            }} className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Download</button>
+              className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Copy Full JSON</button>
+            <button disabled={!jsonOut} onClick={()=>downloadTextAs(`LARAS_FULL_${Date.now()}.json`, jsonOut)}
+              className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Download Full</button>
           </div>
         </header>
 
@@ -309,7 +347,7 @@ export default function SmartLarasCinematicPro(){
                 </select>
               </label>
               <label className="text-sm">
-                <div className="mb-1 opacity-80">Jumlah Adegan</div>
+                <div className="mb-1 opacity-80">Jumlah Adegan (sebelum split)</div>
                 <input type="number" min={3} max={12} value={scenes}
                   onChange={e=>setScenes(Math.min(12,Math.max(3,Number(e.target.value))))}
                   className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"/>
@@ -320,7 +358,7 @@ export default function SmartLarasCinematicPro(){
               <div className="mb-1 opacity-80">Deskripsi/Instruksi</div>
               <textarea value={instruction} onChange={e=>setInstruction(e.target.value)} rows={4}
                 className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                placeholder="Tuliskan cerita, lokasi, hewan/objek, green screen?, durasi (menit/detik), dll."/>
+                placeholder="Contoh: Film kartun 2 menit, tokoh kucing belajar berbagi, 16:9, ceria."/>
             </label>
 
             <div className="mt-3 flex items-center justify-between">
@@ -336,11 +374,32 @@ export default function SmartLarasCinematicPro(){
             {error && <div className="mt-3 text-xs rounded-xl border border-rose-400 bg-rose-900/20 text-rose-200 p-3">{error}</div>}
           </section>
 
-          {/* RIGHT: PREVIEW */}
+          {/* RIGHT: PER-SCENE JSON */}
           <section className="rounded-2xl bg-[#0E1626] border border-white/10 p-4">
-            <h2 className="text-lg font-semibold mb-2">JSON Preview</h2>
-            <div className="rounded-xl bg-[#0B1220] border border-white/10 p-3 max-h-[65vh] overflow-auto">
-              <pre className="text-xs whitespace-pre-wrap">{jsonOut || "// Tekan Generate untuk melihat output JSON (v2.5)"}</pre>
+            <h2 className="text-lg font-semibold mb-2">Per-Scene JSON (maks 8 detik per scene)</h2>
+
+            {perScene.length === 0 && (
+              <div className="rounded-xl bg-[#0B1220] border border-white/10 p-3 text-xs opacity-70">
+                Belum ada output. Tekan <b>Generate</b> terlebih dahulu. Setiap scene akan otomatis dipecah menjadi ≤ 8 detik.
+              </div>
+            )}
+
+            <div className="space-y-3 max-h-[65vh] overflow-auto pr-1">
+              {perScene.map((it, idx) => {
+                const jsonStr = JSON.stringify(it.obj, null, 2);
+                return (
+                  <div key={idx} className="rounded-xl bg-[#0B1220] border border-white/10">
+                    <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
+                      <div className="text-xs font-semibold">{it.title}</div>
+                      <div className="flex gap-2">
+                        <button onClick={()=>navigator.clipboard.writeText(jsonStr)} className="text-xs px-2 py-1 rounded bg-white/10">Copy</button>
+                        <button onClick={()=>downloadTextAs(`scene_${String(idx+1).padStart(2,"0")}.json`, jsonStr)} className="text-xs px-2 py-1 rounded bg-white/10">Download</button>
+                      </div>
+                    </div>
+                    <pre className="text-[11px] whitespace-pre-wrap p-3">{jsonStr}</pre>
+                  </div>
+                );
+              })}
             </div>
           </section>
         </div>
