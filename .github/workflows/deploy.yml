@@ -22,18 +22,23 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install
-        run: npm ci
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Build
         env:
-          # dipake di vite.config.ts kalau kamu prefer process.env
+          # Pastikan vite.config.ts pakai base '/LARAS/' atau baca env ini
           GHP_BASE: /LARAS/
-          # Pilih salah satu ENV di bawah ini (atau biarkan kosong jika tidak dipakai):
-          # Proxy aman (disarankan):
-          VITE_GEMINI_PROXY_URL: ${{ secrets.VITE_GEMINI_PROXY_URL }}
-          # ATAU langsung (tidak aman):
+          # PILIH SALAH SATU MODE AI (atau kosongkan jika belum perlu):
+          # 1) Langsung (tidak aman, tapi cepat):
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
+          # 2) Proxy (aman) — kalau punya Cloudflare Worker:
+          VITE_GEMINI_PROXY_URL: ${{ secrets.VITE_GEMINI_PROXY_URL }}
         run: npm run build
 
       - name: Upload artifact
