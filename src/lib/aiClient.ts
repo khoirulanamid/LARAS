@@ -1,7 +1,5 @@
 // src/lib/aiClient.ts
-// LARAS — AI Boost client (Gemini) with dual mode:
-// - Safe (recommended): use proxy URL (VITE_GEMINI_PROXY_URL)
-// - Direct (unsafe for public): use API key (VITE_GEMINI_API_KEY)
+// AI Boost client (Gemini) — robust JSON sanitizer
 
 import type { AIEnhanceRequest, AIEnhanceResponse } from "../types";
 import SYSTEM_PROMPT from "./aiSystemPrompt";
@@ -11,9 +9,28 @@ const DIRECT_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
-type GeminiResp =
-  | { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>; [k: string]: any }
-  | any;
+type GeminiResp = {
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+} & Record<string, any>;
+
+// --- sanitize: buang ```json, ambil blok { ... } terluas, dan parse ---
+function sanitizeToJSON(raw: string) {
+  if (!raw) throw new Error("Empty response");
+  // buang backticks/fence dan label bahasa
+  let txt = raw.replace(/```(?:json)?/gi, "").replace(/```/g, "").trim();
+
+  // kalau masih ada teks di luar JSON, ambil substring dari { pertama ke } terakhir
+  const first = txt.indexOf("{");
+  const last = txt.lastIndexOf("}");
+  if (first !== -1 && last !== -1 && last > first) {
+    txt = txt.slice(first, last + 1);
+  }
+
+  // hapus koma gantung umum (jarang terjadi, tapi aman)
+  txt = txt.replace(/,\s*([}\]])/g, "$1");
+
+  return JSON.parse(txt);
+}
 
 function buildPayload(req: AIEnhanceRequest) {
   return {
@@ -33,10 +50,11 @@ function parseGemini(data: GeminiResp) {
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("No output from Gemini");
   try {
-    return { enhanced: JSON.parse(text) };
-  } catch {
-    // Fallback: return raw text so user can see why it failed
-    return { enhanced: text };
+    const json = sanitizeToJSON(text);
+    return { enhanced: json };
+  } catch (e: any) {
+    // kirim juga teks mentah supaya bisa dilihat di UI kalau tetap gagal
+    throw new Error(`Model returned non-JSON. Detail: ${e?.message || e}`);
   }
 }
 
@@ -49,7 +67,7 @@ export async function enhanceWithAI(
   const t = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    // ---- Mode 1: Safe (proxy) ----
+    // 1) Proxy mode (aman)
     if (PROXY_URL) {
       const res = await fetch(PROXY_URL, {
         method: "POST",
@@ -57,38 +75,34 @@ export async function enhanceWithAI(
         body: JSON.stringify({ instruction: req.instruction, draft: req.draft }),
         signal: controller.signal,
       });
+      if (!res.ok) throw new Error(`AI proxy failed: ${res.status} ${await res.text()}`);
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`AI proxy failed: ${res.status} ${text}`);
+      const payload = await res.json();
+      // Proxy kamu mungkin sudah mengembalikan { enhanced }, kalau belum, sanitasi di sini:
+      if (payload?.enhanced) return payload as AIEnhanceResponse;
+
+      // fallback: kalau proxy mengembalikan "text"
+      if (typeof payload === "string") {
+        return { enhanced: sanitizeToJSON(payload) };
       }
-      const data = (await res.json()) as AIEnhanceResponse;
-      if (!("enhanced" in data)) throw new Error("Proxy response missing 'enhanced'");
-      return data;
+      return { enhanced: payload };
     }
 
-    // ---- Mode 2: Direct (exposes key in bundle) ----
+    // 2) Direct mode (key dibundle)
     if (DIRECT_KEY) {
-      const payload = buildPayload(req);
       const res = await fetch(`${GEMINI_URL}?key=${DIRECT_KEY}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildPayload(req)),
         signal: controller.signal,
       });
+      if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${await res.text()}`);
 
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`Gemini failed: ${res.status} ${text}`);
-      }
       const data = (await res.json()) as GeminiResp;
       return parseGemini(data);
     }
 
-    // ---- Not configured ----
-    throw new Error(
-      "AI not configured. Set VITE_GEMINI_PROXY_URL (recommended) or VITE_GEMINI_API_KEY."
-    );
+    throw new Error("AI not configured. Set VITE_GEMINI_PROXY_URL or VITE_GEMINI_API_KEY.");
   } finally {
     clearTimeout(t);
   }
