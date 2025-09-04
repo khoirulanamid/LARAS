@@ -1,4 +1,5 @@
-// AI Boost client (Gemini) — ALWAYS return clean JSON object
+// src/lib/aiClient.ts
+// AI Boost client (Gemini) — robust JSON sanitizer
 
 import type { AIEnhanceRequest, AIEnhanceResponse } from "../types";
 import SYSTEM_PROMPT from "./aiSystemPrompt";
@@ -12,12 +13,14 @@ type GeminiResp = {
   candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
 } & Record<string, any>;
 
-/** Buang ```json/```/~~~ + ambil substring dari { pertama sampai } terakhir, lalu parse */
+/** Buang ```json / ``` / ~~~ + ambil substring dari { pertama ke } terakhir */
 function sanitizeToObject(raw: string) {
   if (!raw) throw new Error("Empty response");
   let txt = raw
-    .replace(/```[\s\S]*?```/g, (m) => m.replace(/```(?:json|JSON)?/g, "").replace(/```/g, ""))
-    .replace(/~~~[\s\S]*?~~~/g, (m) => m.replace(/~~~(?:json|JSON)?/g, "").replace(/~~~/g, ""))
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .replace(/~~~(?:json)?/gi, "")
+    .replace(/~~~/g, "")
     .trim();
 
   const first = txt.indexOf("{");
@@ -26,8 +29,7 @@ function sanitizeToObject(raw: string) {
     txt = txt.slice(first, last + 1);
   }
 
-  // hapus koma gantung: ,}
-  txt = txt.replace(/,\s*([}\]])/g, "$1");
+  txt = txt.replace(/,\s*([}\]])/g, "$1"); // buang koma gantung
 
   return JSON.parse(txt);
 }
@@ -60,7 +62,6 @@ export async function enhanceWithAI(
   const t = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 60_000);
 
   try {
-    // 1) Proxy (recommended)
     if (PROXY_URL) {
       const res = await fetch(PROXY_URL, {
         method: "POST",
@@ -71,26 +72,18 @@ export async function enhanceWithAI(
       if (!res.ok) throw new Error(`AI proxy failed: ${res.status} ${await res.text()}`);
 
       const body = await res.json();
-
-      // Jika proxy sudah kembalikan objek JSON:
-      if (body && typeof body === "object" && body.enhanced) {
-        // bisa string (fenced) atau object
+      if (body?.enhanced) {
         if (typeof body.enhanced === "string") {
           return { enhanced: sanitizeToObject(body.enhanced) };
         }
         return { enhanced: body.enhanced };
       }
-
-      // Jika proxy mengembalikan teks langsung:
       if (typeof body === "string") {
         return { enhanced: sanitizeToObject(body) };
       }
-
-      // Fallback: asumsi sudah objek bersih
       return { enhanced: body };
     }
 
-    // 2) Direct (key dibundle ke frontend)
     if (DIRECT_KEY) {
       const res = await fetch(`${GEMINI_URL}?key=${DIRECT_KEY}`, {
         method: "POST",

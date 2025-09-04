@@ -1,683 +1,105 @@
-import React, { useMemo, useState, useEffect } from "react";
-import { enhanceWithAI } from "../lib/aiClient";
-import { STYLE_PROFILES, StyleKey } from "../lib/spec";
-import type { LarasJSON } from "../types";
+// src/lib/aiClient.ts
+// AI Boost client (Gemini) — robust JSON sanitizer
 
-function rid(p: string) {
-  return `${p}_${Math.random().toString(36).slice(2, 10)}`;
-}
-const ARS = ["16:9", "9:16", "1:1", "2.35:1"] as const;
+import type { AIEnhanceRequest, AIEnhanceResponse } from "../types";
+import SYSTEM_PROMPT from "./aiSystemPrompt";
 
-function detectLanguage(txt: string): "id-ID" | "en-US" {
-  const s = txt.toLowerCase();
-  return s.includes(" yang ") || s.includes(" anak") ? "id-ID" : "en-US";
-}
-function extractNumber(txt: string, unit: string) {
-  const m = txt.match(new RegExp(`(\\d{1,3})\\s*(?:${unit})`, "i"));
-  return m ? parseInt(m[1], 10) : undefined;
-}
-function pickDurationSeconds(instruction: string, fallback = 60) {
-  const s = instruction.toLowerCase();
-  const detik =
-    extractNumber(s, "detik") ??
-    extractNumber(s, "sec") ??
-    extractNumber(s, "seconds");
-  const menit =
-    extractNumber(s, "menit") ??
-    extractNumber(s, "minute") ??
-    extractNumber(s, "min");
-  if (menit && !detik) return Math.min(1200, Math.max(15, menit * 60));
-  if (detik) return Math.min(1200, Math.max(10, detik));
-  return fallback;
-}
+const PROXY_URL = import.meta.env.VITE_GEMINI_PROXY_URL as string | undefined;
+const DIRECT_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
+const GEMINI_URL =
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
 
-type MixProfile = "film" | "podcast" | "ads";
-type Character = {
-  display_name: string;
-  role: "Protagonist" | "Sidekick" | "Antagonist" | "Supporting";
-  age?: string;
-  gender?: "male" | "female" | "other";
-  design?: string;
-  facial_features?: string;
-  eyes?: string;
-  hair?: string;
-  clothing?: string;
-  accessories?: string;
-  character_id: string;
-};
+type GeminiResp = {
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+} & Record<string, any>;
 
-// ===== Split helper: pecah scene jadi max 8 detik
-const MAX_SCENE_SEC = 8;
-function splitScenesMax8(full: any) {
-  const scenes = full?.scenes ?? [];
-  let out: any[] = [];
-  scenes.forEach((sc: any) => {
-    const total = Math.max(1, Number(sc.seconds || 0));
-    if (total <= MAX_SCENE_SEC) {
-      out.push(sc);
-      return;
-    }
-    const parts = Math.ceil(total / MAX_SCENE_SEC);
-    const base = Math.floor(total / parts);
-    let remainder = total - base * parts;
-    for (let i = 0; i < parts; i++) {
-      const sec = base + (remainder > 0 ? 1 : 0);
-      remainder = Math.max(0, remainder - 1);
-      const label = sc.name || `Scene ${sc.index}`;
-      const name = `${label} (bagian ${i + 1}/${parts})`;
-      out.push({
-        ...sc,
-        name,
-        seconds: sec,
-      });
-    }
-  });
-  out = out.map((s, i) => ({ ...s, index: i + 1 }));
-  return out;
-}
+/** Buang ```json / ``` / ~~~ + ambil substring dari { pertama ke } terakhir */
+function sanitizeToObject(raw: string) {
+  if (!raw) throw new Error("Empty response");
+  let txt = raw
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .replace(/~~~(?:json)?/gi, "")
+    .replace(/~~~/g, "")
+    .trim();
 
-// ===== Per-scene builder
-function buildPerSceneJSONs(full: any) {
-  const baseHeader = {
-    version: full.version,
-    schema: full.schema,
-    intent: full.intent,
-    consistency: full.consistency,
-    global: full.global,
-    characters: full.characters,
-    narrative: { total_seconds: full?.narrative?.total_seconds ?? 0 },
-    output: full.output,
-    vendor: full.vendor,
-  };
-  const scenes = splitScenesMax8(full);
-  return scenes.map((sc: any) => ({
-    title: `Scene ${sc.index} — ${sc.name || ""} (${sc.seconds}s)`,
-    obj: { ...baseHeader, scenes: [sc] },
-  }));
-}
-
-export default function SmartLarasCinematicPro() {
-  const [style, setStyle] = useState<StyleKey>("Cartoon");
-  const [resolution, setResolution] = useState<"4K" | "8K">("4K");
-  const [fps, setFps] = useState<30 | 60>(30);
-  const [aspect, setAspect] = useState<typeof ARS[number]>("16:9");
-  const [mix, setMix] = useState<MixProfile>("film");
-  const [scenes, setScenes] = useState<number>(6);
-  const [instruction, setInstruction] = useState(
-    "Buat film kartun 2 menit tentang anak kucing yang belajar berbagi mainan; ceria, ramah anak, 16:9."
-  );
-  const [modeAman, setModeAman] = useState(true);
-
-  const [characters, setCharacters] = useState<Character[]>([
-    {
-      display_name: "Milo",
-      role: "Protagonist",
-      age: "6",
-      gender: "other",
-      facial_features: "mata besar ceria",
-      hair: "bulu halus oren",
-      clothing: "kaos biru",
-      accessories: "kalung lonceng",
-      character_id: rid("char"),
-    },
-  ]);
-
-  const [jsonOut, setJsonOut] = useState<string>("");
-  const [perScene, setPerScene] = useState<Array<{ title: string; obj: any }>>(
-    []
-  );
-  const [busy, setBusy] = useState<"idle" | "local" | "ai">("idle");
-  const [error, setError] = useState<string>("");
-
-  // load dari localStorage
-  useEffect(() => {
-    const raw = localStorage.getItem("laras_state_v2_5_split");
-    if (!raw) return;
-    try {
-      const s = JSON.parse(raw);
-      setStyle(s.style ?? style);
-      setResolution(s.resolution ?? resolution);
-      setFps(s.fps ?? fps);
-      setAspect(s.aspect ?? aspect);
-      setMix(s.mix ?? mix);
-      setScenes(s.scenes ?? scenes);
-      setInstruction(s.instruction ?? instruction);
-      setModeAman(Boolean(s.modeAman));
-      if (Array.isArray(s.characters)) setCharacters(s.characters);
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // save ke localStorage
-  useEffect(() => {
-    const snapshot = {
-      style,
-      resolution,
-      fps,
-      aspect,
-      mix,
-      scenes,
-      instruction,
-      modeAman,
-      characters,
-    };
-    localStorage.setItem("laras_state_v2_5_split", JSON.stringify(snapshot));
-  }, [style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters]);
-
-  const lang = useMemo(() => detectLanguage(instruction), [instruction]);
-  const totalSec = useMemo(
-    () => pickDurationSeconds(instruction, 120),
-    [instruction]
-  );
-  const fpsNum = fps === 60 ? 60 : 30;
-
-  function distribute(n: number, total: number) {
-    const weights = [0.12, 0.18, 0.2, 0.2, 0.18, 0.12];
-    const base = Array.from({ length: n }, (_, i) => weights[i % 6]);
-    const sum = base.reduce((a, b) => a + b, 0);
-    return base.map((w) => Math.max(3, Math.round((w / sum) * total)));
+  const first = txt.indexOf("{");
+  const last = txt.lastIndexOf("}");
+  if (first !== -1 && last !== -1 && last > first) {
+    txt = txt.slice(first, last + 1);
   }
-  function safetyLists(enabled: boolean) {
-    if (!enabled)
-      return {
-        do: [
-          "alur natural",
-          "transisi halus",
-          "ekspresi sesuai emosi",
-          "proporsi wajah konsisten",
+
+  txt = txt.replace(/,\s*([}\]])/g, "$1"); // buang koma gantung
+
+  return JSON.parse(txt);
+}
+
+function payload(req: AIEnhanceRequest) {
+  return {
+    contents: [
+      {
+        parts: [
+          { text: SYSTEM_PROMPT },
+          { text: `User instruction:\n${req.instruction}` },
+          { text: `Draft JSON:\n${JSON.stringify(req.draft)}` },
         ],
-        dont: ["distorsi", "noise berat", "glitch teks"],
-      };
-    return {
-      do: [
-        "ramah anak",
-        "hindari jumpscare",
-        "tone positif",
-        "ekspresi lembut",
-        "transisi halus",
-      ],
-      dont: ["kekerasan", "darah", "tema dewasa", "bahasa kasar", "hewan tersakiti"],
-    };
-  }
-
-  const CAMERA_PALETTE = [
-    {
-      angle: "wide",
-      movement: "crane down, dolly-in",
-      lens: "30mm toon",
-      dof: "deep",
-      framing: "establishing",
-    },
-    {
-      angle: "medium",
-      movement: "tracking",
-      lens: "35mm",
-      dof: "medium",
-      framing: "OTS",
-    },
-    {
-      angle: "close-up",
-      movement: "dolly-in",
-      lens: "85mm",
-      dof: "very shallow",
-      framing: "portrait",
-    },
-    {
-      angle: "low angle",
-      movement: "dolly-zoom",
-      lens: "50mm",
-      dof: "shallow",
-      framing: "hero",
-    },
-    {
-      angle: "medium",
-      movement: "handheld subtle",
-      lens: "35mm",
-      dof: "medium",
-      framing: "dialogue",
-    },
-    {
-      angle: "bird view",
-      movement: "drone",
-      lens: "24mm",
-      dof: "deep",
-      framing: "top",
-    },
-  ];
-
-  function buildLocalDraft(): LarasJSON {
-    const profile = STYLE_PROFILES[style];
-    const designId = rid("design");
-    const seed = String(Math.floor(Math.random() * 1_000_000));
-    const seconds = distribute(scenes, totalSec);
-    const safe = safetyLists(modeAman);
-
-    const globalStyle = {
-      profile: style,
-      grading: profile.grading,
-      palette: profile.palette,
-      lens_default: profile.lens_default,
-    };
-    const globalAudio = {
-      mix_profile: mix,
-      music_global: profile.music_global,
-      sfx_global: profile.sfx_global,
-      voiceover: {
-        language: lang,
-        tone:
-          lang === "id-ID"
-            ? "narasi anak jelas, ekspresif, sesuai emosi"
-            : "clear kid narration, expressive",
-        pace:
-          lang === "id-ID"
-            ? "±110–125 wpm (sesuaikan durasi)"
-            : "±110–125 wpm (match duration)",
       },
-    };
-
-    const scenesArr = Array.from({ length: scenes }, (_, i) => {
-      const cam = CAMERA_PALETTE[i % CAMERA_PALETTE.length];
-      const sec = seconds[i];
-      const env = {
-        location: "taman bermain ceria",
-        weather: "cerah",
-        textures: ["rumput hijau", "langit biru", "awan lembut"],
-        props: ["mainan", "ayunan", "ember pasir"],
-      };
-      const lighting = {
-        key: "soft warm",
-        fill: "gentle",
-        rim: "subtle",
-        volumetric: true,
-      };
-      const charRefs = characters.map((c) => ({
-        ref: c.character_id,
-        visible: true,
-        notes: "keep outfit/logo/colors",
-      }));
-      const label =
-        ["Intro", "Build Up", "Conflict", "Climax", "Resolution", "Outro"][i] ||
-        `Scene ${i + 1}`;
-      const dialogue =
-        lang === "id-ID"
-          ? `(${label}) Narator menjelaskan dengan emosi sesuai adegan.`
-          : `(${label}) Narrator explains with emotion matching the beat.`;
-      const music = "playful / comedy light";
-      const sfx = ["soft steps", "toy squeak", "slide whistle", "ambient park"];
-      const micro = ["bunga bergoyang", "awan bergerak", "kilau matahari lembut"];
-
-      return {
-        index: i + 1,
-        name: label,
-        seconds: sec,
-        continuity: { characters: charRefs },
-        camera: cam,
-        environment: env,
-        lighting,
-        action:
-          "Gerakan natural (napas, kedipan, kain/bulu bergerak). Interaksi fisik nyata dengan mainan/lingkungan.",
-        expressions: "selaras emosi adegan",
-        gestures: ["wave", "head nod", "eye blink"],
-        lipsync: "dialogue",
-        dialogue,
-        music_cue: music,
-        sfx,
-        micro_details: micro,
-      };
-    });
-
-    return {
-      version: "2.5",
-      schema: "laras.prompt",
-      intent: "cinematic_storytelling",
-      consistency: {
-        lock: true,
-        design_id: designId,
-        seed,
-        look_lock: { face: true, body: true, clothes: true, colors: true },
-      },
-      global: {
-        style: globalStyle,
-        audio: globalAudio,
-        safety: safe,
-        output: {
-          resolution: resolution === "8K" ? "7680x4320" : "3840x2160",
-          fps: fpsNum,
-          container: "mp4",
-          audio_channels: "stereo",
-        },
-      },
-      characters,
-      scenes: scenesArr,
-      narrative: {
-        logline:
-          lang === "id-ID"
-            ? "Film kartun multi-adegan sinematik dengan konsistensi karakter sempurna."
-            : "Multi-scene cartoon film with perfect character consistency.",
-        total_seconds: totalSec,
-      },
-      output: {
-        mode: "video",
-        aspect_ratio: aspect,
-        fps: fpsNum,
-        duration_seconds: totalSec,
-        frames: fpsNum * totalSec,
-        subtitles: { enabled: true, language: lang },
-        transparent_background: instruction.toLowerCase().includes("green"),
-      },
-      vendor: {
-        canva: {
-          magic_studio: {
-            strict_face_lock: true,
-            geometry_consistency: "ultra",
-            color_consistency: "ultra",
-            cinematic_mode: true,
-          },
-        },
-      },
-    };
-  }
-
-  function refreshPerSceneFromFull(fullObj: any) {
-    let full = fullObj;
-
-    // Fallback: jika AI mengembalikan beats, konversi ke scenes
-    if (
-      (!full?.scenes || !Array.isArray(full.scenes) || full.scenes.length === 0) &&
-      full?.narrative?.beats &&
-      Array.isArray(full.narrative.beats)
-    ) {
-      full = {
-        ...full,
-        scenes: full.narrative.beats.map((b: any, i: number) => ({
-          index: i + 1,
-          name: b.label || `Scene ${i + 1}`,
-          seconds: Math.max(3, Number(b.seconds || 6)),
-          continuity: {
-            characters: (full.characters || []).map((c: any) => ({
-              ref: c.character_id,
-              visible: true,
-            })),
-          },
-          camera: {
-            angle: "medium",
-            movement: "tracking",
-            lens: "35mm",
-            dof: "medium",
-            framing: "dialogue",
-          },
-          environment: { location: "default", weather: "clear", textures: [], props: [] },
-          lighting: { key: "soft", fill: "gentle", rim: "subtle", volumetric: true },
-          action: b.action || "",
-          expressions: "match emotion",
-          gestures: ["eye blink"],
-          lipsync: "dialogue",
-          dialogue: b.dialogue || "",
-          music_cue: "",
-          sfx: [],
-          micro_details: [],
-        })),
-      };
-    }
-
-    const arr = buildPerSceneJSONs(full); // otomatis split ≤ 8s
-    setPerScene(arr);
-  }
-
-  async function generateLocal() {
-    setError("");
-    setBusy("local");
-    try {
-      const draft = buildLocalDraft();
-      setJsonOut(JSON.stringify(draft, null, 2));
-      refreshPerSceneFromFull(draft);
-    } catch (e: any) {
-      setError(e?.message || "Local generator failed");
-    } finally {
-      setBusy("idle");
-    }
-  }
-
-  async function generateWithAI() {
-    setError("");
-    setBusy("ai");
-    try {
-      const draft = buildLocalDraft();
-      const { enhanced } = await enhanceWithAI({ instruction, draft });
-      const full = typeof enhanced === "string" ? JSON.parse(enhanced) : enhanced;
-      setJsonOut(JSON.stringify(full, null, 2));
-      refreshPerSceneFromFull(full);
-    } catch (e: any) {
-      setError(e?.message || "AI Boost failed");
-    } finally {
-      setBusy("idle");
-    }
-  }
-
-  function downloadTextAs(
-    filename: string,
-    content: string,
-    type = "application/json"
-  ) {
-    const blob = new Blob([content], { type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  }
-
-  return (
-    <div className="min-h-screen bg-[#0B1220] text-white">
-      <div className="mx-auto max-w-6xl p-4">
-        <header className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-2xl font-bold">
-              SMART LARAS — Cinematic Pro+ v2.5 (Split ≤ 8s/scene)
-            </h1>
-            <p className="text-xs opacity-70">
-              Per scene JSON terpisah & siap disalin. Scene otomatis dipecah
-              menjadi maksimal 8 detik.
-            </p>
-          </div>
-          <div className="flex gap-2">
-            <button
-              disabled={!jsonOut}
-              onClick={() => navigator.clipboard.writeText(jsonOut)}
-              className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40"
-            >
-              Copy Full JSON
-            </button>
-            <button
-              disabled={!jsonOut}
-              onClick={() =>
-                downloadTextAs(`LARAS_FULL_${Date.now()}.json`, jsonOut)
-              }
-              className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40"
-            >
-              Download Full
-            </button>
-          </div>
-        </header>
-
-        <div className="grid lg:grid-cols-2 gap-4">
-          {/* LEFT: FORM */}
-          <section className="rounded-2xl bg-[#0E1626] border border-white/10 p-4">
-            <div className="grid md:grid-cols-2 gap-3">
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Style</div>
-                <select
-                  value={style}
-                  onChange={(e) => setStyle(e.target.value as StyleKey)}
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                >
-                  <option>Marvel</option>
-                  <option>Pixar</option>
-                  <option>Anime</option>
-                  <option>Cartoon</option>
-                  <option>Real Film</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Aspect</div>
-                <select
-                  value={aspect}
-                  onChange={(e) => setAspect(e.target.value as any)}
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                >
-                  {ARS.map((a) => (
-                    <option key={a}>{a}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Resolusi</div>
-                <select
-                  value={resolution}
-                  onChange={(e) => setResolution(e.target.value as any)}
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                >
-                  <option value="4K">4K (3840x2160)</option>
-                  <option value="8K">8K (7680x4320)</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">FPS</div>
-                <select
-                  value={fps}
-                  onChange={(e) => setFps(Number(e.target.value) as any)}
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                >
-                  <option value={30}>30</option>
-                  <option value={60}>60</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Mix Profile</div>
-                <select
-                  value={mix}
-                  onChange={(e) => setMix(e.target.value as MixProfile)}
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                >
-                  <option value="film">film</option>
-                  <option value="podcast">podcast</option>
-                  <option value="ads">ads</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Jumlah Adegan (sebelum split)</div>
-                <input
-                  type="number"
-                  min={3}
-                  max={12}
-                  value={scenes}
-                  onChange={(e) =>
-                    setScenes(Math.min(12, Math.max(3, Number(e.target.value))))
-                  }
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                />
-              </label>
-            </div>
-
-            <label className="text-sm block mt-3">
-              <div className="mb-1 opacity-80">Deskripsi/Instruksi</div>
-              <textarea
-                value={instruction}
-                onChange={(e) => setInstruction(e.target.value)}
-                rows={4}
-                className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                placeholder="Contoh: Film kartun 2 menit, tokoh kucing belajar berbagi, 16:9, ceria."
-              />
-            </label>
-
-            <div className="mt-3 flex items-center justify-between">
-              <label className="text-sm flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={modeAman}
-                  onChange={(e) => setModeAman(e.target.checked)}
-                />
-                <span>Mode Aman Canva</span>
-              </label>
-              <div className="flex gap-2">
-                <button
-                  onClick={generateLocal}
-                  disabled={busy !== "idle"}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 disabled:opacity-50"
-                >
-                  {busy === "local" ? "Generating..." : "Generate (Lokal)"}
-                </button>
-                <button
-                  onClick={generateWithAI}
-                  disabled={busy !== "idle"}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 disabled:opacity-50"
-                >
-                  {busy === "ai" ? "Boosting..." : "AI Boost Generate"}
-                </button>
-              </div>
-            </div>
-            {error && (
-              <div className="mt-3 text-xs rounded-xl border border-rose-400 bg-rose-900/20 text-rose-200 p-3">
-                {error}
-              </div>
-            )}
-          </section>
-
-          {/* RIGHT: PER-SCENE JSON */}
-          <section className="rounded-2xl bg-[#0E1626] border border-white/10 p-4">
-            <h2 className="text-lg font-semibold mb-2">
-              Per-Scene JSON (maks 8 detik per scene)
-            </h2>
-
-            {perScene.length === 0 && (
-              <div className="rounded-xl bg-[#0B1220] border border-white/10 p-3 text-xs opacity-70">
-                Belum ada output. Tekan <b>Generate</b> terlebih dahulu. Setiap scene
-                akan otomatis dipecah menjadi ≤ 8 detik.
-              </div>
-            )}
-
-            <div className="space-y-3 max-h-[65vh] overflow-auto pr-1">
-              {perScene.map((it, idx) => {
-                const jsonStr = JSON.stringify(it.obj, null, 2);
-                return (
-                  <div
-                    key={idx}
-                    className="rounded-xl bg-[#0B1220] border border-white/10"
-                  >
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-white/10">
-                      <div className="text-xs font-semibold">{it.title}</div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => navigator.clipboard.writeText(jsonStr)}
-                          className="text-xs px-2 py-1 rounded bg-white/10"
-                        >
-                          Copy
-                        </button>
-                        <button
-                          onClick={() =>
-                            downloadTextAs(
-                              `scene_${String(idx + 1).padStart(2, "0")}.json`,
-                              jsonStr
-                            )
-                          }
-                          className="text-xs px-2 py-1 rounded bg-white/10"
-                        >
-                          Download
-                        </button>
-                      </div>
-                    </div>
-                    <pre className="text-[11px] whitespace-pre-wrap p-3">
-                      {jsonStr}
-                    </pre>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        </div>
-      </div>
-    </div>
-  );
+    ],
+  };
 }
+
+function parseGeminiJSON(data: GeminiResp) {
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("No output from Gemini");
+  return { enhanced: sanitizeToObject(text) } as AIEnhanceResponse;
+}
+
+export async function enhanceWithAI(
+  req: AIEnhanceRequest,
+  opts?: { timeoutMs?: number }
+): Promise<AIEnhanceResponse> {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), opts?.timeoutMs ?? 60_000);
+
+  try {
+    if (PROXY_URL) {
+      const res = await fetch(PROXY_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ instruction: req.instruction, draft: req.draft }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`AI proxy failed: ${res.status} ${await res.text()}`);
+
+      const body = await res.json();
+      if (body?.enhanced) {
+        if (typeof body.enhanced === "string") {
+          return { enhanced: sanitizeToObject(body.enhanced) };
+        }
+        return { enhanced: body.enhanced };
+      }
+      if (typeof body === "string") {
+        return { enhanced: sanitizeToObject(body) };
+      }
+      return { enhanced: body };
+    }
+
+    if (DIRECT_KEY) {
+      const res = await fetch(`${GEMINI_URL}?key=${DIRECT_KEY}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload(req)),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`Gemini failed: ${res.status} ${await res.text()}`);
+      const data = (await res.json()) as GeminiResp;
+      return parseGeminiJSON(data);
+    }
+
+    throw new Error("AI not configured. Set VITE_GEMINI_PROXY_URL or VITE_GEMINI_API_KEY.");
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+export default { enhanceWithAI };
