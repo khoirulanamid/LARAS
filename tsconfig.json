@@ -1,15 +1,19 @@
 {
   "compilerOptions": {
-    "target": "es2020",
-    "lib": ["dom", "es2020"],
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
     "jsx": "react-jsx",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "strict": true,
+    "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "allowJs": false,
     "noEmit": true,
-    "allowJs": false
+    "strict": true,
+    "noUncheckedIndexedAccess": false,
+    "types": ["vite/client"]
   },
   "include": ["src"]
 }
