@@ -1,5 +1,5 @@
 import React from "react";
-import { useDarkMode } from "../lib/useDarkMode";
+import { useDarkMode } from "../lib/userDarkMode";
 
 function IconSun(props: React.SVGProps<SVGSVGElement>) {
   return (
