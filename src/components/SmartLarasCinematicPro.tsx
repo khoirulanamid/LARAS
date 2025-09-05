@@ -1,210 +1,213 @@
-// src/components/SmartLarasCinematicPro.tsx
-import { useMemo, useState } from "react";
-import { generateScenes, downloadText, type Scene } from "../lib/aiClient";
+import { useEffect, useMemo, useState } from 'react'
+import { callGeminiStrict } from '../lib/aiClient'
 
-const STYLES = ["Marvel", "Pixar", "Anime", "Cartoon", "Real Film"] as const;
-const ASPECTS = ["16:9", "9:16", "1:1"] as const;
+type OutShape = {
+  full: any
+  per_scene: any[]
+}
+
+function copy(text: string) {
+  navigator.clipboard.writeText(text)
+}
+
+function download(name: string, data: any) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = name; a.click()
+  URL.revokeObjectURL(url)
+}
 
 export default function SmartLarasCinematicPro() {
-  const [desc, setDesc] = useState(
-    "Buat film kartun edukatif 1 menit tema kebun binatang; ceria, ramah, positif."
-  );
-  const [style, setStyle] = useState<(typeof STYLES)[number]>("Cartoon");
-  const [aspect, setAspect] = useState<(typeof ASPECTS)[number]>("16:9");
-  const [apiKey, setApiKey] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [scenes, setScenes] = useState<Scene[]>([]);
-  const [error, setError] = useState<string>("");
+  const [apiKey, setApiKey] = useState('')
+  const [model, setModel] = useState('gemini-1.5-pro')
+  const [title, setTitle] = useState('Kartun Edukasi Anak: Menjaga Lingkungan')
+  const [scenes, setScenes] = useState(20)
+  const [secPerScene, setSecPerScene] = useState(8)
+  const [designId, setDesignId] = useState('kids_enviro_v1')
+  const [seed, setSeed] = useState('782364')
+  const [mainChars, setMainChars] = useState('Ari, Beni, Citra') // tiga anak
+  const [support, setSupport] = useState('Kucing Piko; Burung kecil; Tetangga Pak Tani')
+  const [locations, setLocations] = useState('Rumah Ari; Rumah Beni; Rumah Citra; SD 05; Taman kota; Jalan depan rumah')
+  const [userNotes, setUserNotes] = useState('Fokus edukasi: hemat air & buang sampah di tempatnya. Humor sopan. Tanpa kekerasan.')
 
-  const fullJson = useMemo(() => JSON.stringify({ scenes }, null, 2), [scenes]);
+  const [loading, setLoading] = useState(false)
+  const [tab, setTab] = useState<'full'|'per'>('full')
+  const [out, setOut] = useState<OutShape|null>(null)
+  const [error, setError] = useState<string|undefined>()
 
-  async function onGenerate() {
-    setError("");
-    setLoading(true);
-    setScenes([]);
-    try {
-      const out = await generateScenes({ apiKey, description: desc, style, aspect });
-      setScenes(out);
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k)
+  }, [])
+  function saveKey(k:string){ setApiKey(k); localStorage.setItem('GEMINI_KEY', k) }
+
+  const canGo = useMemo(() =>
+    apiKey.trim().length>20 && scenes>0 && secPerScene>0 && title.trim().length>2, [apiKey, scenes, secPerScene, title])
+
+  function buildPrompt(){
+    return `
+Kamu adalah "LARAS Story Orchestrator", tim profesional 1000 orang dalam satu otak.
+Tugas: hasilkan JSON *ketat schema* untuk pembuatan animasi/film/iklan/podcast/berita yang sangat presisi.
+
+### KONSISTENSI WAJIB (LOCK)
+- design_id: "${designId}" ; seed: "${seed}"
+- Semua karakter utama dan pendamping memiliki ID PERSIS sama di setiap scene.
+- Atribut TERKUNCI dan HARUS sama di seluruh scene:
+  rambut (bentuk/warna/panjang), muka (bentuk/proporsi), mata (warna/pupil), hidung, telinga,
+  tangan, tubuh, kaki; baju (model, warna hex spesifik), celana/rok (model, warna hex spesifik), sepatu.
+- Ekspresi/aksi: saat bicara/tertawa/dll tetap sesuai karakter (boleh berubah sesuai adegan tapi identitas visual tidak berubah).
+- Rumah/lingkungan/objek penting (mis: rumah Ari/Beni/Citra, langit, taman kota) punya ID lokasi persisten dengan ciri visual yang konsisten.
+
+### METADATA CERITA
+- judul: "${title}"
+- jumlah_scene: ${scenes}
+- durasi_per_scene_detik: ${secPerScene}
+- karakter_utama: ${mainChars}
+- karakter_pendamping/hewannya: ${support}
+- lokasi_utama: ${locations}
+- catatan_user: ${userNotes}
+
+### AUDIO & KAMERA
+- Audio global: mix_profile "film", musik ramah anak, SFX relevan (langkah kaki, daun, kicau burung, dll).
+- Kamera: gunakan deskripsi sinematik; tuliskan per scene (frame, lensa, gerak kamera, komposisi).
+- Dialog: sopan, edukatif, mudah dimengerti anak.
+
+### OUTPUT STRICT (WAJIB)
+HANYA output JSON *tanpa teks lain*, dengan bentuk:
+{
+  "full": {
+    "version": "3.0",
+    "schema": "laras.story",
+    "consistency": {
+      "lock": true,
+      "design_id": "${designId}",
+      "seed": "${seed}",
+      "look_lock": { "face": true, "body": true, "clothes": true, "colors": true }
+    },
+    "roster": [
+      {
+        "id": "char_ari", "name": "Ari",
+        "visual": { "hair": {"style":"...", "color":"#..."}, "eyes":{"color":"#...", "pupil":"..."}, "skin_tone":"...", "top":{"model":"...", "color":"#..."}, "bottom":{"model":"...", "color":"#..."}, "shoes":{"model":"...", "color":"#..."} },
+        "personality": "..."
+      }
+      // isi lengkap untuk semua karakter (termasuk pendamping & hewan)
+    ],
+    "locations": [
+      { "id":"loc_rumah_ari", "name":"Rumah Ari", "visual_key":"...", "palette":["#...", "#..."] }
+      // isi lengkap semua lokasi penting
+    ],
+    "audio": {
+      "mix_profile":"film",
+      "music_global":["..."],
+      "sfx_global":["langkah_kaki","kicau_burung","daun_tertiup"]
+    },
+    "scenes": [
+      {
+        "id":"S001",
+        "durationSec": ${secPerScene},
+        "camera": { "frame":"...", "lens":"28mm", "movement":"pan/tilt/dolly", "composition":"rule_of_thirds" },
+        "location_id":"loc_rumah_ari",
+        "characters":[{"ref":"char_ari","pose":"...", "expression":"...", "action":"..."}],
+        "dialog":[{"ref":"char_ari","text":"..."}],
+        "sfx":["..."], "music_cue":"...", "notes":""
+      }
+      // total ${scenes} scene
+    ]
+  },
+  "per_scene": [
+    // array berisi objek scene yang sama persis dengan 'scenes' di atas, namun dipisah per item
+  ]
+}
+Wajib isi ${scenes} scene dan setiap scene bernilai ${secPerScene} detik.
+Pastikan roster/locations/IDs sama persis di semua scene.
+    `.trim()
   }
 
-  function copy(text: string) {
-    navigator.clipboard.writeText(text);
+  async function onGenerate(){
+    try{
+      setLoading(true); setError(undefined); setOut(null)
+      const prompt = buildPrompt()
+      const data = await callGeminiStrict({ apiKey, model, prompt })
+      if (!data?.full || !Array.isArray(data?.per_scene)) {
+        throw new Error('Output tidak sesuai bentuk { full, per_scene }')
+      }
+      setOut(data as OutShape)
+    }catch(e:any){
+      setError(e?.message || 'Unknown error')
+    }finally{ setLoading(false) }
   }
+
+  const outTextFull = useMemo(()=> out ? JSON.stringify(out.full, null, 2) : '', [out])
+  const outTextPer = useMemo(()=> out ? JSON.stringify(out.per_scene, null, 2) : '', [out])
 
   return (
-    <div className="app">
-      <div className="container">
-        <header className="header">
-          <div className="logo-dot" />
-          <h1>LARAS Cinematic Pro — <span>AI Only</span></h1>
-        </header>
+    <div className="card">
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12}}>
+        <div style={{fontWeight:900, letterSpacing:.3, fontSize:18}}>Story Controls</div>
+        <div className="row">
+          <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
+            {loading ? 'Generating…' : 'Generate'}
+          </button>
+        </div>
+      </div>
 
-        <div className="layout">
-          {/* LEFT: FORM */}
-          <section className="panel">
-            <div className="field">
-              <label>Deskripsi</label>
-              <textarea
-                value={desc}
-                onChange={(e) => setDesc(e.target.value)}
-                rows={6}
-              />
-            </div>
+      <div className="grid" style={{marginTop:12}}>
+        <div>
+          <div className="kv">
+            <label>Gemini API Key</label>
+            <input type="text" placeholder="AIza..." value={apiKey} onChange={e=>saveKey(e.target.value)} />
+            <small className="helper">Disimpan lokal (localStorage).</small>
 
-            <div className="row">
-              <div className="field">
-                <label>Style</label>
-                <select value={style} onChange={(e) => setStyle(e.target.value as any)}>
-                  {STYLES.map((s) => (
-                    <option key={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-              <div className="field">
-                <label>Aspect</label>
-                <select value={aspect} onChange={(e) => setAspect(e.target.value as any)}>
-                  {ASPECTS.map((a) => (
-                    <option key={a}>{a}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+            <label>Model</label>
+            <input type="text" value={model} onChange={e=>setModel(e.target.value)} />
 
-            <div className="field">
-              <label>API Key (Gemini)</label>
-              <input
-                type="password"
-                placeholder="AI Studio API key…"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-              <div className="hint">
-                Bisa dikosongkan jika sudah set <code>VITE_GEMINI_KEY</code>.
-              </div>
-            </div>
+            <label>Judul</label>
+            <input type="text" value={title} onChange={e=>setTitle(e.target.value)} />
 
-            <button
-              className="btn btn-primary"
-              onClick={onGenerate}
-              disabled={loading || !desc.trim()}
-            >
-              {loading ? "Generating…" : "Generate (AI)"}
-            </button>
+            <label>Jumlah Scene</label>
+            <input type="number" value={scenes} min={1} onChange={e=>setScenes(parseInt(e.target.value||'1'))} />
 
-            {error && <div className="alert">{error}</div>}
-          </section>
+            <label>Detik per Scene</label>
+            <input type="number" value={secPerScene} min={1} onChange={e=>setSecPerScene(parseInt(e.target.value||'8'))} />
 
-          {/* RIGHT: RESULTS */}
-          <section className="panel">
-            <div className="panel-head">
-              <h2>Preview per Scene (≤8s)</h2>
-              {scenes.length > 0 && (
-                <button className="btn-link" onClick={() => copy(fullJson)}>
-                  Copy Full JSON
-                </button>
-              )}
-            </div>
+            <label>Design ID</label>
+            <input type="text" value={designId} onChange={e=>setDesignId(e.target.value)} />
 
-            {scenes.length === 0 ? (
-              <p className="muted">Belum ada scene. Klik Generate dulu.</p>
-            ) : (
-              <div className="scene-list">
-                {scenes.map((s) => (
-                  <div key={s.index} className="scene-card">
-                    <div className="scene-head">
-                      <div className="scene-title">
-                        Scene {s.index} — {s.name} <span>({s.seconds}s)</span>
-                      </div>
-                      <button
-                        className="btn-link"
-                        onClick={() => copy(JSON.stringify(s, null, 2))}
-                      >
-                        Copy JSON Scene
-                      </button>
-                    </div>
-                    <div className="scene-body">
-                      <div><b>Kamera:</b> {s.camera}</div>
-                      <div><b>Lingkungan:</b> {s.environment}</div>
-                      <div><b>Aksi:</b> {s.action}</div>
-                      {s.dialogue && <div><b>Dialog:</b> {s.dialogue}</div>}
-                      <div><b>Musik:</b> {s.music_cue}</div>
-                      {s.sfx?.length ? <div><b>SFX:</b> {s.sfx.join(", ")}</div> : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <label>Seed</label>
+            <input type="text" value={seed} onChange={e=>setSeed(e.target.value)} />
 
-            <div className="divider" />
+            <label>Karakter Utama</label>
+            <input type="text" value={mainChars} onChange={e=>setMainChars(e.target.value)} />
 
-            <div className="export-row">
-              <button
-                className="btn"
-                onClick={() => downloadText("full.json", fullJson)}
-                disabled={!scenes.length}
-              >
-                Download Full JSON
-              </button>
-              <button
-                className="btn"
-                onClick={() =>
-                  scenes.forEach((s) =>
-                    downloadText(
-                      'scene_${String(s.index).padStart(2, "0")}.json',
-                      JSON.stringify(s, null, 2)
-                    )
-                  )
-                }
-                disabled={!scenes.length}
-              >
-                Download per Scene (JSON)
-              </button>
-              <button
-                className="btn"
-                onClick={() =>
-                  downloadText(
-                    "vo.txt",
-                    scenes
-                      .map(
-                        (s) =>
-                          'Scene ${s.index} (${s.seconds}s)\n${(s.dialogue || "").trim()}\n'
-                      )
-                      .join("\n")
-                  )
-                }
-                disabled={!scenes.length}
-              >
-                Export VO .txt
-              </button>
-              <button
-                className="btn"
-                onClick={() =>
-                  downloadText(
-                    "vo.md",
-                    scenes
-                      .map(
-                        (s) =>
-                          '### Scene ${s.index} (${s.seconds}s)\n\n${(s.dialogue || "").trim()}\n'
-                      )
-                      .join("\n\n")
-                  )
-                }
-                disabled={!scenes.length}
-              >
-                Export VO .md
-              </button>
-            </div>
+            <label>Pendamping/Hewan</label>
+            <input type="text" value={support} onChange={e=>setSupport(e.target.value)} />
 
-            <h3 className="subhead">Full JSON (gabungan)</h3>
-            <pre className="code">{fullJson}</pre>
-          </section>
+            <label>Lokasi Utama</label>
+            <input type="text" value={locations} onChange={e=>setLocations(e.target.value)} />
+
+            <label>Catatan</label>
+            <textarea value={userNotes} onChange={e=>setUserNotes(e.target.value)} />
+          </div>
+        </div>
+
+        <div>
+          <div className="tabs">
+            <div className={`tab ${tab==='full'?'active':''}`} onClick={()=>setTab('full')}>FULL JSON</div>
+            <div className={`tab ${tab==='per'?'active':''}`} onClick={()=>setTab('per')}>PER-SCENE JSON</div>
+          </div>
+          <div className="row" style={{marginTop:10}}>
+            <button className="button secondary" disabled={!out} onClick={()=> tab==='full' ? copy(outTextFull) : copy(outTextPer)}>Copy</button>
+            <button className="button ghost" disabled={!out} onClick={()=> tab==='full' ? download('full.json', out!.full) : download('per_scene.json', out!.per_scene)}>Download</button>
+          </div>
+          <div className="output" style={{marginTop:10}}>
+            { error
+              ? `❌ ${error}`
+              : out
+                ? (tab==='full' ? outTextFull : outTextPer)
+                : 'Belum ada output. Klik Generate setelah mengisi kontrol.' }
+          </div>
         </div>
       </div>
     </div>
-  );
+  )
 }
