@@ -3,6 +3,7 @@ import CharacterForm from "./CharacterForm";
 import ObjectForm, { UIObject } from "./ObjectForm";
 import { downloadText, buildPerSceneTextPrompt, drawStoryboardToCanvasAndDownload } from "../lib/exporters";
 import { buildAnatomy, buildWardrobe, buildPhysiology, buildEnvironment, buildMicroFX } from "../lib/deepDetail";
+import ThemeToggle from "./ThemeToggle";
 
 type StyleProfile = "Marvel" | "Pixar" | "Anime" | "Cartoon" | "Real Film";
 
@@ -15,7 +16,6 @@ export default function SmartLarasCinematicPro() {
   const [durationSec, setDurationSec] = useState<number>(120);
   const [aspect, setAspect] = useState<string>("16:9");
 
-  // state karakter & object env (stub UI sederhana, biar compile)
   const [characters, setCharacters] = useState<any[]>([
     {
       display_name: "Milo",
@@ -40,7 +40,6 @@ export default function SmartLarasCinematicPro() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // ====== generator scene splitter (maks 8 detik/scene)
   function splitDuration(totalSec: number): number[] {
     const maxPer = 8;
     const out: number[] = [];
@@ -75,14 +74,12 @@ export default function SmartLarasCinematicPro() {
       const sec = clamp(durationSec || 60, 10, 600);
       const fps = 30;
 
-      // micro detail
       const anatomy = buildAnatomy({});
       const wardrobe = buildWardrobe({});
       const physio = buildPhysiology({});
       const env = buildEnvironment({});
       const microfx = buildMicroFX(style);
 
-      // global JSON
       const base: any = {
         version: "2.6",
         schema: "laras.prompt",
@@ -135,7 +132,6 @@ export default function SmartLarasCinematicPro() {
         narrative: { total_seconds: sec }
       };
 
-      // scenes
       const chunks = splitDuration(sec);
       const scenes: any[] = [];
       for (let i = 0; i < chunks.length; i++) {
@@ -161,10 +157,8 @@ export default function SmartLarasCinematicPro() {
       }
       base.scenes = scenes;
 
-      // full JSON text
       setFullJson(JSON.stringify(base, null, 2));
 
-      // per scene JSON array untuk panel copy per-skena
       const per: Array<{ title: string; obj: any }> = [];
       for (let j = 0; j < scenes.length; j++) {
         per.push({
@@ -187,7 +181,6 @@ export default function SmartLarasCinematicPro() {
     }
   }
 
-  // export VO .txt / .md untuk tiap scene
   function exportAllSceneVO(format: "txt" | "md") {
     if (!perScene.length) return;
     const ext = format === "txt" ? ".txt" : ".md";
@@ -204,7 +197,6 @@ export default function SmartLarasCinematicPro() {
     }
   }
 
-  // export Prompt text per scene (bukan JSON)
   function exportAllSceneTextPrompt() {
     if (!perScene.length) return;
     for (let i = 0; i < perScene.length; i++) {
@@ -214,7 +206,6 @@ export default function SmartLarasCinematicPro() {
     }
   }
 
-  // storyboard PNG
   function exportStoryboardPNG() {
     const scenes = perScene.map(function(ps){ return (ps.obj && ps.obj.scenes && ps.obj.scenes[0]) || null; }).filter(function(x){return !!x;});
     drawStoryboardToCanvasAndDownload({
@@ -226,31 +217,37 @@ export default function SmartLarasCinematicPro() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900">
-      <div className="mx-auto max-w-5xl p-6">
-        <header className="mb-4 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ (Split 8s/scene)</h1>
-            <p className="text-sm text-neutral-600">Auto split per scene (maks 8 detik), export VO .txt/.md, prompt per scene, dan storyboard PNG.</p>
+    <div className="min-h-screen theme-abstract text-neutral-900 dark:text-white">
+      <div className="mx-auto max-w-6xl p-6">
+        {/* Header */}
+        <header className="mb-5 flex items-center justify-between card px-5 py-3">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-fuchsia-500"></div>
+            <div>
+              <h1 className="text-xl md:text-2xl font-bold">SMART LARAS — Cinematic Pro+</h1>
+              <p className="text-xs md:text-sm text-muted">
+                Auto split per scene (maks 8 detik), export VO (.txt/.md), prompt per scene, dan storyboard PNG.
+              </p>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <button onClick={function(){ if(fullJson) navigator.clipboard.writeText(fullJson); }} disabled={!fullJson} className="rounded-2xl px-4 py-2 shadow bg-neutral-900 text-white disabled:opacity-40">Copy Full JSON</button>
-          </div>
+          <ThemeToggle />
         </header>
 
-        <section className="rounded-3xl bg-white p-4 shadow">
-          <div className="flex gap-2 mb-3">
-            <button onClick={function(){presetApply("Marvel");}} className="px-3 py-1 rounded-full bg-red-600 text-white text-sm">Marvel</button>
-            <button onClick={function(){presetApply("Pixar");}} className="px-3 py-1 rounded-full bg-blue-600 text-white text-sm">Pixar</button>
-            <button onClick={function(){presetApply("Anime");}} className="px-3 py-1 rounded-full bg-pink-600 text-white text-sm">Anime</button>
-            <button onClick={function(){presetApply("Cartoon");}} className="px-3 py-1 rounded-full bg-orange-600 text-white text-sm">Cartoon</button>
-            <button onClick={function(){presetApply("Real Film");}} className="px-3 py-1 rounded-full bg-gray-700 text-white text-sm">Real Film</button>
+        {/* Controls */}
+        <section className="card p-4 mb-4">
+          <div className="flex gap-2 mb-3 flex-wrap">
+            <span className="badge border-black/10 dark:border-white/15">Preset:</span>
+            <button onClick={function(){presetApply("Marvel");}} className="btn btn-ghost">Marvel</button>
+            <button onClick={function(){presetApply("Pixar");}} className="btn btn-ghost">Pixar</button>
+            <button onClick={function(){presetApply("Anime");}} className="btn btn-ghost">Anime</button>
+            <button onClick={function(){presetApply("Cartoon");}} className="btn btn-ghost">Cartoon</button>
+            <button onClick={function(){presetApply("Real Film");}} className="btn btn-ghost">Real Film</button>
           </div>
 
           <label className="block text-sm mb-2">
-            <span className="text-neutral-700">Perintah pengguna</span>
+            <span className="text-neutral-700 dark:text-slate-200">Perintah pengguna</span>
             <textarea
-              className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2"
+              className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 bg-white/80 dark:bg-slate-900/60 border-black/10 dark:border-white/10"
               rows={3}
               value={instruction}
               onChange={function(e){setInstruction(e.target.value);}}
@@ -260,11 +257,11 @@ export default function SmartLarasCinematicPro() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <label className="text-sm">
               <div>Durasi (detik)</div>
-              <input type="number" min={10} max={600} value={durationSec} onChange={function(e){ setDurationSec(parseInt(e.target.value||"60",10)); }} className="w-full rounded-xl border px-3 py-2"/>
+              <input type="number" min={10} max={600} value={durationSec} onChange={function(e){ setDurationSec(parseInt(e.target.value||"60",10)); }} className="w-full rounded-xl border px-3 py-2 bg-white/80 dark:bg-slate-900/60 border-black/10 dark:border-white/10"/>
             </label>
             <label className="text-sm">
               <div>Gaya</div>
-              <select value={style} onChange={function(e){ setStyle(e.target.value as StyleProfile); }} className="w-full rounded-xl border px-3 py-2">
+              <select value={style} onChange={function(e){ setStyle(e.target.value as StyleProfile); }} className="w-full rounded-xl border px-3 py-2 bg-white/80 dark:bg-slate-900/60 border-black/10 dark:border-white/10">
                 <option>Marvel</option>
                 <option>Pixar</option>
                 <option>Anime</option>
@@ -274,7 +271,7 @@ export default function SmartLarasCinematicPro() {
             </label>
             <label className="text-sm">
               <div>Aspect</div>
-              <select value={aspect} onChange={function(e){ setAspect(e.target.value); }} className="w-full rounded-xl border px-3 py-2">
+              <select value={aspect} onChange={function(e){ setAspect(e.target.value); }} className="w-full rounded-xl border px-3 py-2 bg-white/80 dark:bg-slate-900/60 border-black/10 dark:border-white/10">
                 <option>16:9</option>
                 <option>9:16</option>
                 <option>1:1</option>
@@ -284,28 +281,30 @@ export default function SmartLarasCinematicPro() {
           </div>
 
           <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={genStory} className="rounded-2xl px-4 py-2 shadow bg-neutral-900 text-white">Generate</button>
-            <button onClick={function(){exportAllSceneVO("txt");}} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Export VO .txt</button>
-            <button onClick={function(){exportAllSceneVO("md");}} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Export VO .md</button>
-            <button onClick={exportAllSceneTextPrompt} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Export Prompt per Scene (.txt)</button>
-            <button onClick={exportStoryboardPNG} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Generate Storyboard (PNG)</button>
+            <button onClick={genStory} className="btn btn-primary">Generate</button>
+            <button onClick={function(){ if(fullJson) navigator.clipboard.writeText(fullJson); }} disabled={!fullJson} className="btn btn-ghost disabled:opacity-40">Copy Full JSON</button>
+            <button onClick={function(){exportAllSceneVO("txt");}} disabled={!perScene.length} className="btn btn-ghost disabled:opacity-40">Export VO .txt</button>
+            <button onClick={function(){exportAllSceneVO("md");}} disabled={!perScene.length} className="btn btn-ghost disabled:opacity-40">Export VO .md</button>
+            <button onClick={exportAllSceneTextPrompt} disabled={!perScene.length} className="btn btn-ghost disabled:opacity-40">Export Prompt per Scene</button>
+            <button onClick={exportStoryboardPNG} disabled={!perScene.length} className="btn btn-ghost disabled:opacity-40">Generate Storyboard (PNG)</button>
           </div>
 
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
         </section>
 
-        <section className="mt-4 rounded-3xl bg-white p-4 shadow">
+        {/* Per-Scene */}
+        <section className="card p-4 mb-4">
           <h2 className="text-lg font-semibold mb-2">Per-Scene JSON (maks 8 detik/scene)</h2>
-          {!perScene.length ? <div className="text-sm text-neutral-600">Belum ada. Klik Generate dulu.</div> : null}
+          {!perScene.length ? <div className="text-sm text-muted">Belum ada. Klik Generate dulu.</div> : null}
           <div className="grid md:grid-cols-2 gap-3">
-            {perScene.map(function(ps, idx){
+            {perScene.map(function(ps){
               const content = JSON.stringify(ps.obj, null, 2);
               return (
-                <div key={ps.title} className="border rounded-xl p-3">
-                  <div className="mb-2 flex items-center justify-between">
+                <div key={ps.title} className="rounded-xl border border-black/10 dark:border-white/10 overflow-hidden">
+                  <div className="px-3 py-2 flex items-center justify-between bg-black/[0.03] dark:bg-white/[0.06]">
                     <div className="font-semibold text-sm">{ps.title}</div>
                     <div className="flex gap-2">
-                      <button onClick={function(){ navigator.clipboard.writeText(content); }} className="text-xs px-2 py-1 rounded bg-neutral-900 text-white">Copy</button>
+                      <button onClick={function(){ navigator.clipboard.writeText(content); }} className="btn btn-primary">Copy</button>
                       <button onClick={function(){
                         const blob = new Blob([content], {type: "application/json"});
                         const url = URL.createObjectURL(blob);
@@ -313,21 +312,23 @@ export default function SmartLarasCinematicPro() {
                         a.href = url; a.download = ps.title;
                         document.body.appendChild(a); a.click(); a.remove();
                         URL.revokeObjectURL(url);
-                      }} className="text-xs px-2 py-1 rounded bg-white border">Download</button>
+                      }} className="btn btn-ghost">Download</button>
                     </div>
                   </div>
-                  <pre className="whitespace-pre-wrap text-xs bg-neutral-900 text-neutral-100 p-3 rounded-xl max-h-64 overflow-auto">{content}</pre>
+                  <pre className="whitespace-pre-wrap text-xs bg-neutral-900 text-neutral-100 p-3 max-h-64 overflow-auto">{content}</pre>
                 </div>
               );
             })}
           </div>
         </section>
 
-        <section className="mt-4 rounded-3xl bg-white p-4 shadow">
+        {/* Full JSON */}
+        <section className="card p-4 mb-4">
           <h2 className="text-lg font-semibold mb-2">Full JSON (gabungan)</h2>
           <pre className="whitespace-pre-wrap text-xs bg-neutral-900 text-neutral-100 p-4 rounded-2xl overflow-auto max-h-[50vh]">{fullJson || "// Belum ada. Klik Generate."}</pre>
         </section>
 
+        {/* Hidden canvas for storyboard */}
         <canvas ref={canvasRef} width={1800} height={1200} style={{display:"none"}} />
       </div>
     </div>
