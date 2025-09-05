@@ -56,7 +56,7 @@ export default function CharacterForm({
   characters: UICharacter[];
   onChange: (list: UICharacter[]) => void;
 }) {
-  function update(i: number, patch: Partial[UICharacter]) {
+  function update(i: number, patch: Partial<UICharacter>) {
     const next = [...characters];
     next[i] = { ...next[i], ...patch };
     onChange(next);
@@ -143,7 +143,7 @@ export default function CharacterForm({
               <Field label="Sepatu (material)" value={c.footwear_material} onChange={(v)=>update(i,{footwear_material:v})}/>
               <Field label="Sepatu (sol)" value={c.footwear_sole} onChange={(v)=>update(i,{footwear_sole:v})}/>
               <Field label="Sepatu (tali)" value={c.footwear_laces} onChange={(v)=>update(i,{footwear_laces:v})}/>
-              <Field label="Aksesori (list)" value={c.accessories} onChange={(v)=>update(i,{accessories:v})} col={3}/>
+              <Field label="Aksesori (list, koma)" value={c.accessories} onChange={(v)=>update(i,{accessories:v})} col={3}/>
 
               <Field label="Napas (gaya)" value={c.breathing_style} onChange={(v)=>update(i,{breathing_style:v})}/>
               <Field label="Jalan/Lari (gaya)" value={c.gait_style} onChange={(v)=>update(i,{gait_style:v})}/>

@@ -3,6 +3,7 @@ import { enhanceWithAI } from "../lib/aiClient";
 import { STYLE_PROFILES, StyleKey } from "../lib/spec";
 import type { LarasJSON } from "../types";
 import CharacterForm, { UICharacter } from "./CharacterForm";
+import ObjectForm, { UIObject, flattenObjectsToEnv } from "./ObjectForm";
 import {
   buildPerSceneTextPrompt,
   buildGlobalVOText,
@@ -147,16 +148,21 @@ export default function SmartLarasCinematicPro() {
     },
   ]);
 
+  // NEW: Objects (props/flora/fauna/effect/sfx/particles)
+  const [objects, setObjects] = useState<UIObject[]>([
+    { id: rid("obj"), kind: "prop", name: "play ball", color: "red-white", material: "rubber", behavior: "bounces softly", sfx: "soft thump" },
+    { id: rid("obj"), kind: "flora", name: "trees with soft leaves" },
+    { id: rid("obj"), kind: "fauna", name: "small birds" },
+  ]);
+
   const [jsonOut, setJsonOut] = useState<string>("");
-  const [perScene, setPerScene] = useState<Array<{ title: string; obj: any }>>(
-    []
-  );
+  const [perScene, setPerScene] = useState<Array<{ title: string; obj: any }>>([]);
   const [busy, setBusy] = useState<"idle" | "local" | "ai">("idle");
   const [error, setError] = useState<string>("");
 
-  // preset
+  // preset load
   useEffect(() => {
-    const raw = localStorage.getItem("laras_preset_v26_ultra");
+    const raw = localStorage.getItem("laras_preset_v26_ultra_obj");
     if (!raw) return;
     try {
       const p = JSON.parse(raw);
@@ -169,19 +175,18 @@ export default function SmartLarasCinematicPro() {
       setInstruction(p.instruction ?? instruction);
       setModeAman(Boolean(p.modeAman));
       if (Array.isArray(p.characters)) setCharacters(p.characters);
+      if (Array.isArray(p.objects)) setObjects(p.objects);
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // preset save
   useEffect(() => {
-    const snapshot = { style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters };
-    localStorage.setItem("laras_preset_v26_ultra", JSON.stringify(snapshot));
-  }, [style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters]);
+    const snapshot = { style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters, objects };
+    localStorage.setItem("laras_preset_v26_ultra_obj", JSON.stringify(snapshot));
+  }, [style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters, objects]);
 
   const lang = useMemo(() => detectLanguage(instruction), [instruction]);
-  const totalSec = useMemo(
-    () => pickDurationSeconds(instruction, 120),
-    [instruction]
-  );
+  const totalSec = useMemo(() => pickDurationSeconds(instruction, 120), [instruction]);
   const fpsNum = fps === 60 ? 60 : 30;
 
   function distribute(n: number, total: number) {
@@ -211,7 +216,6 @@ export default function SmartLarasCinematicPro() {
     { angle: "bird view", movement: "drone", lens: "24mm", dof: "deep", framing: "top" },
   ];
 
-  // build characters with ultra detail blocks
   function buildCharacters() {
     return characters.map((c) => {
       const anatomy = buildAnatomy({
@@ -263,9 +267,22 @@ export default function SmartLarasCinematicPro() {
     const charBlocks = buildCharacters();
     const microFX = buildMicroFX(style);
 
+    // collect env extras from ObjectForm
+    const envExtra = flattenObjectsToEnv(objects);
+
     const scenesArr = Array.from({ length: scenes }, (_, i) => {
       const cam = CAMERA_PALETTE[i % CAMERA_PALETTE.length];
-      const env = buildEnvironment({});
+      const envBase = buildEnvironment({});
+      // merge env with extras
+      const env = {
+        ...envBase,
+        flora: [...(envBase.flora||[]), ...envExtra.flora],
+        fauna: [...(envBase.fauna||[]), ...envExtra.fauna],
+        props: [...(envBase.props||[]), ...envExtra.props],
+        ambient_sfx: [...(envBase.ambient_sfx||[]), ...envExtra.sfx],
+        particles: [...(envBase.particles||[]), ...envExtra.particles],
+      };
+
       return {
         index: i + 1,
         name: ["Intro", "Build Up", "Conflict", "Climax", "Resolution", "Outro"][i] || `Scene ${i + 1}`,
@@ -309,13 +326,12 @@ export default function SmartLarasCinematicPro() {
       },
       characters: charBlocks,
       scenes: scenesArr,
-      narrative: { logline: "Film multi-adegan dengan detail anatomi, wardrobe, fisiologi, dan lingkungan ultra detil.", total_seconds: totalSec },
+      narrative: { logline: "Film multi-adegan dengan detail anatomi, wardrobe, fisiologi, lingkungan & objek ultra detail.", total_seconds: totalSec },
       output: { mode: "video", aspect_ratio: aspect, fps: fpsNum, duration_seconds: totalSec, frames: fpsNum * totalSec, subtitles: { enabled: true, language: lang } },
       vendor: { canva: { magic_studio: { strict_face_lock: true, geometry_consistency: "ultra", color_consistency: "ultra", cinematic_mode: true } } },
     };
   }
 
-  const [perScene, setPerScene] = useState<Array<{ title: string; obj: any }>>([]);
   function refreshPerSceneFromFull(fullObj: any) {
     let full = fullObj;
     if ((!full?.scenes || !full.scenes.length) && full?.narrative?.beats) {
@@ -348,21 +364,13 @@ export default function SmartLarasCinematicPro() {
     drawStoryboardToCanvasAndDownload({ canvasRef, title: "Storyboard Ultra", scenes: scenesLocal, aspect });
   }
 
-  function downloadTextFile(name: string, content: string, type="text/plain") {
-    const blob = new Blob([content], { type }); const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = name;
-    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  }
-
-  const [error, setError] = useState<string>("");
-
   return (
     <div className="min-h-screen bg-[#0B1220] text-white">
       <div className="mx-auto max-w-6xl p-4">
         <header className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ Ultra Detail v2.6</h1>
-            <p className="text-xs opacity-70">Anatomi, wardrobe, fisiologi, lingkungan & micro-FX level granular. Split ≤ 8s/scene.</p>
+            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ Ultra Detail v2.6 + Objects</h1>
+            <p className="text-xs opacity-70">Ultra-detail anatomy, wardrobe, physiology, environment & objects. Split ≤ 8s/scene.</p>
           </div>
           <div className="flex gap-2">
             <button disabled={!jsonOut} onClick={() => navigator.clipboard.writeText(jsonOut)} className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Copy Full JSON</button>
@@ -423,6 +431,7 @@ export default function SmartLarasCinematicPro() {
             </div>
 
             <CharacterForm characters={characters} onChange={setCharacters} />
+            <ObjectForm objects={objects} onChange={setObjects} />
 
             <div className="flex flex-wrap gap-2 pt-1">
               <button onClick={generateLocal} disabled={busy!=="idle"} className="px-4 py-2 rounded-xl bg-emerald-600 disabled:opacity-50">
@@ -470,8 +479,10 @@ export default function SmartLarasCinematicPro() {
                       <div className="flex flex-wrap gap-2">
                         <button onClick={()=>navigator.clipboard.writeText(jsonStr)} className="text-xs px-2 py-1 rounded bg-white/10">Copy JSON</button>
                         <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}.json`, jsonStr, "application/json")} className="text-xs px-2 py-1 rounded bg-white/10">Download JSON</button>
+
                         <button onClick={()=>navigator.clipboard.writeText(textPrompt)} className="text-xs px-2 py-1 rounded bg-white/10">Copy Prompt</button>
                         <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}_prompt.txt`, textPrompt, "text/plain")} className="text-xs px-2 py-1 rounded bg-white/10">Prompt .txt</button>
+
                         <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}_VO.txt`, voTxt, "text/plain")} className="text-xs px-2 py-1 rounded bg-white/10">VO .txt</button>
                         <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}_VO.md`, `### Scene ${idx+1} VO\n\n${voTxt}`, "text/markdown")} className="text-xs px-2 py-1 rounded bg-white/10">VO .md</button>
                       </div>
