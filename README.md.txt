@@ -1,9 +1,17 @@
-# SMART LARAS — Cinematic Pro+ Story
+# LARAS Cinematic Pro+ (AI-only)
 
-Natural-language → JSON LARAS generator untuk Canva/Magic Studio.
-Fokus: **storytelling halus** dan **continuity** per scene (pembukaan → perkembangan → konflik → resolusi → penutup).
+Fitur:
+- AI-only (Gemini) → JSON valid
+- Multi-scene (≤ 8 detik/scene) + konsistensi karakter
+- Export VO (.txt/.md)
+- Storyboard PNG
+- Preset style (Marvel, Pixar, Anime, Cartoon, Real Film)
+- LocalStorage preset
+- Dark/Light, UI abstrak
 
-## Jalankan Lokal
+## Jalankan
 ```bash
 npm i
 npm run dev
+# build
+npm run build && npm run preview

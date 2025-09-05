@@ -17,8 +17,8 @@ export default function CharacterForm({
   onChange: (next: Char[]) => void;
 }) {
   function rid() {
-    return 'char_${Math.random().toString(36).slice(2, 10)}';
-}
+    return "char_" + Math.random().toString(36).slice(2, 10);
+  }
   return (
     <div className="grid gap-3">
       <button
@@ -67,7 +67,7 @@ export default function CharacterForm({
           </div>
           <input
             className="border rounded px-2 py-1"
-            placeholder="look detail"
+            placeholder="look detail (mata, rambut, warna kulit, dll.)"
             value={c.look ?? ""}
             onChange={(e) => {
               const next = [...chars];
@@ -77,7 +77,7 @@ export default function CharacterForm({
           />
           <input
             className="border rounded px-2 py-1"
-            placeholder="outfit detail"
+            placeholder="outfit detail (baju, celana, aksesoris, warna)"
             value={c.outfit ?? ""}
             onChange={(e) => {
               const next = [...chars];

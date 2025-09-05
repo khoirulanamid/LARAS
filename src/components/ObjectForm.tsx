@@ -9,7 +9,7 @@ export default function ObjectForm({
   onChange: (next: Record<string, any>) => void;
 }) {
   function rid(p: string) {
-    return ${p}_${Math.random().toString(36).slice(2, 10)};
+    return 'obj_${p}_${Math.random().toString(36).slice(2, 10)}';
   }
 
   function set(key: string, val: any) {

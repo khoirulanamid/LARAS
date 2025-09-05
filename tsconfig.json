@@ -12,7 +12,6 @@
     "allowJs": false,
     "noEmit": true,
     "strict": true,
-    "noUncheckedIndexedAccess": false,
     "types": ["vite/client"]
   },
   "include": ["src"]
