@@ -23,7 +23,7 @@ export default function ThemeToggle() {
   const isDark = theme === "dark";
   return (
     <button
-      onClick={function(){ setTheme(isDark ? "light" : "dark"); }}
+      onClick={() => setTheme(isDark ? "light" : "dark")}
       className="btn btn-ghost rounded-2xl"
       title={isDark ? "Switch to light" : "Switch to dark"}
     >
