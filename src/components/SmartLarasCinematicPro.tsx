@@ -328,7 +328,7 @@ export default function SmartLarasCinematicPro() {
           <pre className="whitespace-pre-wrap text-xs bg-neutral-900 text-neutral-100 p-4 rounded-2xl overflow-auto max-h-[50vh]">{fullJson || "// Belum ada. Klik Generate."}</pre>
         </section>
 
-        {/* Hidden canvas for storyboard */}
+        {/* Hiidden canvas for storyboard */}
         <canvas ref={canvasRef} width={1800} height={1200} style={{display:"none"}} />
       </div>
     </div>
