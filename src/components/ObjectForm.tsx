@@ -13,8 +13,8 @@ export type UIObject = {
 };
 
 function rid(p: string) {
-  // ✅ perbaikan: gunakan template literal dengan backtick
-  return ${p}_${Math.random().toString(36).slice(2, 10)};
+  // versi aman: tanpa template literal/backtick
+  return p + "_" + Math.random().toString(36).slice(2, 10);
 }
 
 // helper utk mengubah list UIObject → field environment
@@ -25,10 +25,9 @@ export function flattenObjectsToEnv(list: UIObject[]) {
   const sfx: string[] = [];
   const particles: string[] = [];
 
-  list.forEach((o) => {
-    const detail = [o.name, o.color, o.material, o.texture, o.behavior]
-      .filter(Boolean)
-      .join(" / ");
+  list.forEach(function(o) {
+    const pieces = [o.name, o.color, o.material, o.texture, o.behavior].filter(function(x){return !!x;});
+    const detail = pieces.join(" / ");
     const text = detail || o.name;
 
     if (o.kind === "flora") flora.push(text);
@@ -37,7 +36,7 @@ export function flattenObjectsToEnv(list: UIObject[]) {
     else if (o.kind === "sfx") { if (o.sfx) sfx.push(o.sfx); else sfx.push(text); }
     else if (o.kind === "particles") { if (o.particles) particles.push(o.particles); else particles.push(text); }
     else if (o.kind === "effect") {
-      // effect kita masukkan ke particles agar terlihat sebagai micro FX
+      // effect → micro FX
       particles.push(text);
     }
   });
@@ -53,18 +52,17 @@ export default function ObjectForm({
   onChange: (list: UIObject[]) => void;
 }) {
   function update(i: number, patch: Partial<UIObject>) {
-    const next = [...objects];
-    next[i] = { ...next[i], ...patch };
+    const next = objects.slice();
+    next[i] = Object.assign({}, next[i], patch);
     onChange(next);
   }
   function add(kind: UIObject["kind"]) {
-    onChange([
-      ...objects,
-      { id: rid("obj"), kind, name: "New Item" } as UIObject,
-    ]);
+    onChange(
+      objects.concat([{ id: rid("obj"), kind: kind, name: "New Item" } as UIObject])
+    );
   }
   function remove(i: number) {
-    const next = objects.filter((_, idx) => idx !== i);
+    const next = objects.filter(function(_, idx){ return idx !== i; });
     onChange(next);
   }
 
@@ -73,53 +71,63 @@ export default function ObjectForm({
       <div className="flex items-center justify-between mb-2">
         <div className="font-semibold text-sm">Objects / Environment</div>
         <div className="flex gap-1">
-          <button onClick={()=>add("prop")} className="text-xs px-2 py-1 rounded bg-white/10">+ Prop</button>
-          <button onClick={()=>add("flora")} className="text-xs px-2 py-1 rounded bg-white/10">+ Flora</button>
-          <button onClick={()=>add("fauna")} className="text-xs px-2 py-1 rounded bg-white/10">+ Fauna</button>
-          <button onClick={()=>add("effect")} className="text-xs px-2 py-1 rounded bg-white/10">+ Effect</button>
-          <button onClick={()=>add("sfx")} className="text-xs px-2 py-1 rounded bg-white/10">+ SFX</button>
-          <button onClick={()=>add("particles")} className="text-xs px-2 py-1 rounded bg-white/10">+ Particles</button>
+          <button onClick={function(){add("prop");}} className="text-xs px-2 py-1 rounded bg-white/10">+ Prop</button>
+          <button onClick={function(){add("flora");}} className="text-xs px-2 py-1 rounded bg-white/10">+ Flora</button>
+          <button onClick={function(){add("fauna");}} className="text-xs px-2 py-1 rounded bg-white/10">+ Fauna</button>
+          <button onClick={function(){add("effect");}} className="text-xs px-2 py-1 rounded bg-white/10">+ Effect</button>
+          <button onClick={function(){add("sfx");}} className="text-xs px-2 py-1 rounded bg-white/10">+ SFX</button>
+          <button onClick={function(){add("particles");}} className="text-xs px-2 py-1 rounded bg-white/10">+ Particles</button>
         </div>
       </div>
 
       <div className="space-y-3">
-        {objects.map((o, i) => (
-          <div key={o.id} className="rounded-xl bg-[#0B1220] border border-white/10 p-3">
-            <div className="grid md:grid-cols-6 gap-2">
-              <Select label="Jenis" value={o.kind} onChange={(v)=>update(i,{kind: v as UIObject["kind"]})}
-                options={["prop","flora","fauna","effect","sfx","particles"]}/>
-              <Field label="Nama" value={o.name} onChange={(v)=>update(i,{name:v})}/>
-              <Field label="Warna" value={o.color} onChange={(v)=>update(i,{color:v})}/>
-              <Field label="Material" value={o.material} onChange={(v)=>update(i,{material:v})}/>
-              <Field label="Tekstur" value={o.texture} onChange={(v)=>update(i,{texture:v})}/>
-              <Field label="Perilaku" value={o.behavior} onChange={(v)=>update(i,{behavior:v})}/>
-              <Field label="SFX" value={o.sfx} onChange={(v)=>update(i,{sfx:v})}/>
-              <Field label="Particles" value={o.particles} onChange={(v)=>update(i,{particles:v})}/>
+        {objects.map(function(o, i) {
+          return (
+            <div key={o.id} className="rounded-xl bg-[#0B1220] border border-white/10 p-3">
+              <div className="grid md:grid-cols-6 gap-2">
+                <Select label="Jenis" value={o.kind} onChange={function(v){update(i,{kind: v as UIObject["kind"]});}}
+                  options={["prop","flora","fauna","effect","sfx","particles"]}/>
+                <Field label="Nama" value={o.name} onChange={function(v){update(i,{name:v});}}/>
+                <Field label="Warna" value={o.color} onChange={function(v){update(i,{color:v});}}/>
+                <Field label="Material" value={o.material} onChange={function(v){update(i,{material:v});}}/>
+                <Field label="Tekstur" value={o.texture} onChange={function(v){update(i,{texture:v});}}/>
+                <Field label="Perilaku" value={o.behavior} onChange={function(v){update(i,{behavior:v});}}/>
+                <Field label="SFX" value={o.sfx} onChange={function(v){update(i,{sfx:v});}}/>
+                <Field label="Particles" value={o.particles} onChange={function(v){update(i,{particles:v});}}/>
+              </div>
+              <div className="mt-2 flex justify-end">
+                <button onClick={function(){remove(i);}} className="text-xs px-2 py-1 rounded bg-rose-700/60">Hapus</button>
+              </div>
             </div>
-            <div className="mt-2 flex justify-end">
-              <button onClick={()=>remove(i)} className="text-xs px-2 py-1 rounded bg-rose-700/60">Hapus</button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function Field({label, value, onChange}:{label:string; value?:any; onChange:(v:string)=>void}) {
+function Field(props: {label:string; value?:any; onChange:(v:string)=>void}) {
   return (
     <label className="text-xs">
-      <div>{label}</div>
-      <input value={value||""} onChange={e=>onChange(e.target.value)} className="w-full rounded bg-transparent border border-white/10 px-2 py-1"/>
+      <div>{props.label}</div>
+      <input
+        value={props.value||""}
+        onChange={function(e){props.onChange(e.target.value);}}
+        className="w-full rounded bg-transparent border border-white/10 px-2 py-1"
+      />
     </label>
   );
 }
-function Select({label, value, onChange, options}:{label:string; value:any; onChange:(v:string)=>void; options:string[]}) {
+function Select(props:{label:string; value:any; onChange:(v:string)=>void; options:string[]}) {
   return (
     <label className="text-xs">
-      <div>{label}</div>
-      <select value={value} onChange={e=>onChange(e.target.value)} className="w-full rounded bg-transparent border border-white/10 px-2 py-1">
-        {options.map(o=><option key={o}>{o}</option>)}
+      <div>{props.label}</div>
+      <select
+        value={props.value}
+        onChange={function(e){props.onChange(e.target.value);}}
+        className="w-full rounded bg-transparent border border-white/10 px-2 py-1"
+      >
+        {props.options.map(function(o){ return <option key={o}>{o}</option>; })}
       </select>
     </label>
   );

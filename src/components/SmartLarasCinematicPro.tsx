@@ -1,499 +1,334 @@
-import React, { useMemo, useState, useEffect, useRef } from "react";
-import { enhanceWithAI } from "../lib/aiClient";
-import { STYLE_PROFILES, StyleKey } from "../lib/spec";
-import type { LarasJSON } from "../types";
-import CharacterForm, { UICharacter } from "./CharacterForm";
-import ObjectForm, { UIObject, flattenObjectsToEnv } from "./ObjectForm";
-import {
-  buildPerSceneTextPrompt,
-  buildGlobalVOText,
-  buildSceneVOText,
-  downloadText,
-  drawStoryboardToCanvasAndDownload,
-} from "../lib/exporters";
-import {
-  buildAnatomy,
-  buildWardrobe,
-  buildPhysiology,
-  buildEnvironment,
-  buildMicroFX,
-} from "../lib/deepDetail";
+import React, { useMemo, useRef, useState } from "react";
+import CharacterForm from "./CharacterForm";
+import ObjectForm, { UIObject } from "./ObjectForm";
+import { downloadText, buildPerSceneTextPrompt, drawStoryboardToCanvasAndDownload } from "../lib/exporters";
+import { buildAnatomy, buildWardrobe, buildPhysiology, buildEnvironment, buildMicroFX } from "../lib/deepDetail";
 
-function rid(p: string) {
-  return `${p}_${Math.random().toString(36).slice(2, 10)}`;
-}
-const ARS = ["16:9", "9:16", "1:1", "2.35:1"] as const;
+type StyleProfile = "Marvel" | "Pixar" | "Anime" | "Cartoon" | "Real Film";
 
-function detectLanguage(txt: string): "id-ID" | "en-US" {
-  const s = txt.toLowerCase();
-  return s.includes(" yang ") || s.includes(" anak") ? "id-ID" : "en-US";
-}
-function extractNumber(txt: string, unit: string) {
-  const m = txt.match(new RegExp(`(\\d{1,3})\\s*(?:${unit})`, "i"));
-  return m ? parseInt(m[1], 10) : undefined;
-}
-function pickDurationSeconds(instruction: string, fallback = 60) {
-  const s = instruction.toLowerCase();
-  const detik =
-    extractNumber(s, "detik") ??
-    extractNumber(s, "sec") ??
-    extractNumber(s, "seconds");
-  const menit =
-    extractNumber(s, "menit") ??
-    extractNumber(s, "minute") ??
-    extractNumber(s, "min");
-  if (menit && !detik) return Math.min(1200, Math.max(15, menit * 60));
-  if (detik) return Math.min(1200, Math.max(10, detik));
-  return fallback;
-}
-
-type MixProfile = "film" | "podcast" | "ads";
-
-const MAX_SCENE_SEC = 8;
-function splitScenesMax8(full: any) {
-  const scenes = full?.scenes ?? [];
-  let out: any[] = [];
-  scenes.forEach((sc: any) => {
-    const total = Math.max(1, Number(sc.seconds || 0));
-    if (total <= MAX_SCENE_SEC) {
-      out.push(sc);
-      return;
-    }
-    const parts = Math.ceil(total / MAX_SCENE_SEC);
-    const base = Math.floor(total / parts);
-    let remainder = total - base * parts;
-    for (let i = 0; i < parts; i++) {
-      const sec = base + (remainder > 0 ? 1 : 0);
-      remainder = Math.max(0, remainder - 1);
-      out.push({
-        ...sc,
-        name: `${sc.name || `Scene ${sc.index}`} (bagian ${i + 1}/${parts})`,
-        seconds: sec,
-      });
-    }
-  });
-  return out.map((s, i) => ({ ...s, index: i + 1 }));
-}
-
-function buildPerSceneJSONs(full: any) {
-  const scenes = splitScenesMax8(full);
-  return scenes.map((sc: any) => {
-    const fps = full.output?.fps || full.global?.output?.fps || 30;
-    return {
-      title: `Scene ${sc.index} — ${sc.name || ""} (${sc.seconds}s)`,
-      obj: {
-        version: full.version,
-        schema: full.schema,
-        intent: full.intent,
-        consistency: full.consistency,
-        global: {
-          ...full.global,
-          audio: {
-            ...(full.global?.audio ?? {}),
-            voiceover: { ...(full.global?.audio?.voiceover ?? {}), enabled: true },
-          },
-        },
-        characters: full.characters,
-        narrative: { total_seconds: Number(sc.seconds || 0) },
-        output: {
-          ...(full.output ?? {}),
-          duration_seconds: Number(sc.seconds || 0),
-          frames: fps * Number(sc.seconds || 0),
-        },
-        vendor: full.vendor,
-        scenes: [sc],
-      },
-    };
-  });
-}
+function clamp(n: number, min: number, max: number) { return Math.max(min, Math.min(max, n)); }
+function rid(prefix: string) { return prefix + "_" + Math.random().toString(36).slice(2,10); }
 
 export default function SmartLarasCinematicPro() {
-  const [style, setStyle] = useState<StyleKey>("Cartoon");
-  const [resolution, setResolution] = useState<"4K" | "8K">("4K");
-  const [fps, setFps] = useState<30 | 60>(30);
-  const [aspect, setAspect] = useState<typeof ARS[number]>("16:9");
-  const [mix, setMix] = useState<MixProfile>("film");
-  const [scenes, setScenes] = useState<number>(6);
-  const [instruction, setInstruction] = useState(
-    "Buat film kartun 2 menit tentang anak kucing yang belajar berbagi mainan; ceria, ramah anak, 16:9."
-  );
-  const [modeAman, setModeAman] = useState(true);
+  const [instruction, setInstruction] = useState("Buat film kartun 2 menit tentang Milo, anak kucing oranye ceria di taman bermain.");
+  const [style, setStyle] = useState<StyleProfile>("Cartoon");
+  const [durationSec, setDurationSec] = useState<number>(120);
+  const [aspect, setAspect] = useState<string>("16:9");
 
-  const [characters, setCharacters] = useState<UICharacter[]>([
+  // state karakter & object env (stub UI sederhana, biar compile)
+  const [characters, setCharacters] = useState<any[]>([
     {
       display_name: "Milo",
       role: "Protagonist",
+      character_id: rid("char"),
       age: "6",
       gender: "other",
-      design: "anak kucing kartun orisinal",
-      height_cm: 120,
-      body_type: "child-proportion",
-      skin_tone: "#F6C89F",
-      eyes_shape: "large round",
-      iris_color: "green",
-      pupil_shape: "round",
-      eyelashes: "subtle",
-      eyebrows_shape: "soft arc",
-      hair_style: "short",
-      hair_length: "short",
-      hair_color: "orange ginger",
-      fingernails: "short clean",
-      toenails: "clean",
-      top_type: "t-shirt", top_color: "#2563EB", top_color_detail: "cool blue highlights", top_material: "cotton knit", top_texture: "fine weave", top_fit: "relaxed",
-      bottom_type: "shorts", bottom_color: "#F59E0B", bottom_color_detail: "warm amber", bottom_material: "cotton twill", bottom_texture: "subtle twill",
-      footwear_type: "sneakers", footwear_color: "#FFFFFF", footwear_material: "canvas",
-      accessories: "small bell collar",
-      breathing_style: "calm", gait_style: "playful run & hop", speech_style: "cheerful child",
-      character_id: rid("char"),
-    },
+      design: "anak kucing kartun",
+      facial_features: "mata besar ceria",
+      eyes: "hijau",
+      hair: "bulu halus oren",
+      clothing: "kaos biru",
+      accessories: "kalung lonceng",
+      expression: "ceria"
+    }
   ]);
+  const [objects, setObjects] = useState<UIObject[]>([]);
 
-  // NEW: Objects (props/flora/fauna/effect/sfx/particles)
-  const [objects, setObjects] = useState<UIObject[]>([
-    { id: rid("obj"), kind: "prop", name: "play ball", color: "red-white", material: "rubber", behavior: "bounces softly", sfx: "soft thump" },
-    { id: rid("obj"), kind: "flora", name: "trees with soft leaves" },
-    { id: rid("obj"), kind: "fauna", name: "small birds" },
-  ]);
-
-  const [jsonOut, setJsonOut] = useState<string>("");
+  const [fullJson, setFullJson] = useState<string>("");
   const [perScene, setPerScene] = useState<Array<{ title: string; obj: any }>>([]);
-  const [busy, setBusy] = useState<"idle" | "local" | "ai">("idle");
   const [error, setError] = useState<string>("");
 
-  // preset load
-  useEffect(() => {
-    const raw = localStorage.getItem("laras_preset_v26_ultra_obj");
-    if (!raw) return;
-    try {
-      const p = JSON.parse(raw);
-      setStyle(p.style ?? style);
-      setResolution(p.resolution ?? resolution);
-      setFps(p.fps ?? fps);
-      setAspect(p.aspect ?? aspect);
-      setMix(p.mix ?? mix);
-      setScenes(p.scenes ?? scenes);
-      setInstruction(p.instruction ?? instruction);
-      setModeAman(Boolean(p.modeAman));
-      if (Array.isArray(p.characters)) setCharacters(p.characters);
-      if (Array.isArray(p.objects)) setObjects(p.objects);
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  // preset save
-  useEffect(() => {
-    const snapshot = { style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters, objects };
-    localStorage.setItem("laras_preset_v26_ultra_obj", JSON.stringify(snapshot));
-  }, [style, resolution, fps, aspect, mix, scenes, instruction, modeAman, characters, objects]);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const lang = useMemo(() => detectLanguage(instruction), [instruction]);
-  const totalSec = useMemo(() => pickDurationSeconds(instruction, 120), [instruction]);
-  const fpsNum = fps === 60 ? 60 : 30;
-
-  function distribute(n: number, total: number) {
-    const weights = [0.12, 0.18, 0.2, 0.2, 0.18, 0.12];
-    const base = Array.from({ length: n }, (_, i) => weights[i % 6]);
-    const sum = base.reduce((a, b) => a + b, 0);
-    return base.map((w) => Math.max(3, Math.round((w / sum) * total)));
-  }
-  function safetyLists(enabled: boolean) {
-    if (!enabled)
-      return {
-        do: ["alur natural", "transisi halus", "ekspresi sesuai emosi", "proporsi wajah konsisten"],
-        dont: ["distorsi", "noise berat", "glitch teks"],
-      };
-    return {
-      do: ["ramah anak", "hindari jumpscare", "tone positif", "ekspresi lembut", "transisi halus"],
-      dont: ["kekerasan", "darah", "tema dewasa", "bahasa kasar", "hewan tersakiti"],
-    };
-  }
-
-  const CAMERA_PALETTE = [
-    { angle: "wide", movement: "crane down, dolly-in", lens: "30mm toon", dof: "deep", framing: "establishing" },
-    { angle: "medium", movement: "tracking", lens: "35mm", dof: "medium", framing: "OTS" },
-    { angle: "close-up", movement: "dolly-in", lens: "85mm", dof: "very shallow", framing: "portrait" },
-    { angle: "low angle", movement: "dolly-zoom", lens: "50mm", dof: "shallow", framing: "hero" },
-    { angle: "medium", movement: "handheld subtle", lens: "35mm", dof: "medium", framing: "dialogue" },
-    { angle: "bird view", movement: "drone", lens: "24mm", dof: "deep", framing: "top" },
-  ];
-
-  function buildCharacters() {
-    return characters.map((c) => {
-      const anatomy = buildAnatomy({
-        height_cm: c.height_cm,
-        body_type: c.body_type,
-        skin_tone: c.skin_tone,
-        facial: {
-          eyes: { shape: c.eyes_shape, iris_color: c.iris_color, pupil_shape: c.pupil_shape, eyelashes: c.eyelashes },
-          eyebrows: { shape: c.eyebrows_shape, thickness: c.eyebrows_thickness },
-          nose: { shape: c.nose_shape },
-          mouth: { lip_shape: c.mouth_lip_shape, teeth: c.teeth_detail },
-          ear: { shape: c.ear_shape },
-        },
-        hair: { style: c.hair_style, length: c.hair_length, color: c.hair_color },
-        hands: { fingernails: c.fingernails },
-        feet: { toenails: c.toenails },
-      });
-      const wardrobe = buildWardrobe({
-        top: { type: c.top_type, color: c.top_color, color_detail: c.top_color_detail, material: c.top_material, texture: c.top_texture, fit: c.top_fit, pattern: c.top_pattern, trim: c.top_trim },
-        bottom: { type: c.bottom_type, color: c.bottom_color, color_detail: c.bottom_color_detail, material: c.bottom_material, texture: c.bottom_texture, fit: c.bottom_fit, pattern: c.bottom_pattern, hem: c.bottom_hem },
-        footwear: { type: c.footwear_type, color: c.footwear_color, material: c.footwear_material, sole: c.footwear_sole, laces: c.footwear_laces },
-        accessories: c.accessories ? c.accessories.split(",").map(s=>s.trim()).filter(Boolean) : undefined,
-      });
-      const physiology = buildPhysiology({
-        breathing: { style: c.breathing_style },
-        gait: { style: c.gait_style },
-        speech: { style: c.speech_style },
-      });
-      return {
-        display_name: c.display_name,
-        role: c.role,
-        age: c.age,
-        gender: c.gender,
-        design: c.design,
-        character_id: c.character_id,
-        anatomy,
-        wardrobe,
-        physiology,
-      };
-    });
-  }
-
-  function buildLocalDraft(): LarasJSON {
-    const profile = STYLE_PROFILES[style];
-    const designId = rid("design");
-    const seed = String(Math.floor(Math.random() * 1_000_000));
-    const seconds = distribute(scenes, totalSec);
-    const safe = safetyLists(modeAman);
-    const charBlocks = buildCharacters();
-    const microFX = buildMicroFX(style);
-
-    // collect env extras from ObjectForm
-    const envExtra = flattenObjectsToEnv(objects);
-
-    const scenesArr = Array.from({ length: scenes }, (_, i) => {
-      const cam = CAMERA_PALETTE[i % CAMERA_PALETTE.length];
-      const envBase = buildEnvironment({});
-      // merge env with extras
-      const env = {
-        ...envBase,
-        flora: [...(envBase.flora||[]), ...envExtra.flora],
-        fauna: [...(envBase.fauna||[]), ...envExtra.fauna],
-        props: [...(envBase.props||[]), ...envExtra.props],
-        ambient_sfx: [...(envBase.ambient_sfx||[]), ...envExtra.sfx],
-        particles: [...(envBase.particles||[]), ...envExtra.particles],
-      };
-
-      return {
-        index: i + 1,
-        name: ["Intro", "Build Up", "Conflict", "Climax", "Resolution", "Outro"][i] || `Scene ${i + 1}`,
-        seconds: seconds[i],
-        continuity: {
-          characters: charBlocks.map((c) => ({
-            ref: c.character_id,
-            visible: true,
-            lock: ["face","body","clothes","colors"],
-          })),
-        },
-        camera: cam,
-        environment: env,
-        lighting: env.lighting,
-        action: "Natural body motion with secondary animation (hair/cloth).",
-        expressions: "match scene emotion with micro expressions.",
-        gestures: ["wave","head nod","eye blink","shoulder tilt subtle"],
-        lipsync: "dialogue",
-        dialogue: "(Scene) Narasi anak yang jelas dan ceria.",
-        music_cue: i===0 ? "playful start" : i===scenes-1 ? "warm closing" : "light playful",
-        sfx: [...(env.ambient_sfx||[])],
-        micro_details: [...(env.particles||[]), ...microFX],
-        physiology_overrides: {
-          breathing: "visible but subtle chest motion on idle",
-          gait: "footfall soft with slight shoe compression",
-          facial_micro: ["blink cadence 3-5s", "micro-smile during positive lines"],
-        },
-      };
-    });
-
-    return {
-      version: "2.6",
-      schema: "laras.prompt",
-      intent: "cinematic_storytelling",
-      consistency: { lock: true, design_id: designId, seed, look_lock: { face: true, body: true, clothes: true, colors: true } },
-      global: {
-        style: { profile: style, grading: profile.grading, palette: profile.palette, lens_default: profile.lens_default },
-        audio: { mix_profile: mix, music_global: profile.music_global, sfx_global: profile.sfx_global, voiceover: { language: lang, tone: "jelas & ceria", pace: "±110–125 wpm" } },
-        safety: safe,
-        output: { resolution: resolution === "8K" ? "7680x4320" : "3840x2160", fps: fpsNum, container: "mp4", audio_channels: "stereo" },
-      },
-      characters: charBlocks,
-      scenes: scenesArr,
-      narrative: { logline: "Film multi-adegan dengan detail anatomi, wardrobe, fisiologi, lingkungan & objek ultra detail.", total_seconds: totalSec },
-      output: { mode: "video", aspect_ratio: aspect, fps: fpsNum, duration_seconds: totalSec, frames: fpsNum * totalSec, subtitles: { enabled: true, language: lang } },
-      vendor: { canva: { magic_studio: { strict_face_lock: true, geometry_consistency: "ultra", color_consistency: "ultra", cinematic_mode: true } } },
-    };
-  }
-
-  function refreshPerSceneFromFull(fullObj: any) {
-    let full = fullObj;
-    if ((!full?.scenes || !full.scenes.length) && full?.narrative?.beats) {
-      full = { ...full, scenes: full.narrative.beats.map((b: any, i: number) => ({
-        index: i + 1,
-        name: b.label || `Scene ${i + 1}`,
-        seconds: Math.max(3, Number(b.seconds || 6)),
-        dialogue: b.dialogue || "" })) };
+  // ====== generator scene splitter (maks 8 detik/scene)
+  function splitDuration(totalSec: number): number[] {
+    const maxPer = 8;
+    const out: number[] = [];
+    let remain = clamp(totalSec, 1, 600);
+    while (remain > 0) {
+      const take = Math.min(maxPer, remain);
+      out.push(take);
+      remain -= take;
     }
-    setPerScene(buildPerSceneJSONs(full));
+    return out;
   }
 
-  async function generateLocal() {
-    setError(""); setBusy("local");
-    try { const draft = buildLocalDraft(); setJsonOut(JSON.stringify(draft, null, 2)); refreshPerSceneFromFull(draft); }
-    catch (e: any) { setError(e?.message || "Local generator failed"); }
-    finally { setBusy("idle"); }
-  }
-  async function generateWithAI() {
-    setError(""); setBusy("ai");
-    try { const draft = buildLocalDraft(); const { enhanced } = await enhanceWithAI({ instruction, draft }); const full = typeof enhanced === "string" ? JSON.parse(enhanced) : enhanced; setJsonOut(JSON.stringify(full, null, 2)); refreshPerSceneFromFull(full); }
-    catch (e: any) { setError(e?.message || "AI Boost failed"); }
-    finally { setBusy("idle"); }
+  function presetApply(p: StyleProfile) {
+    setStyle(p);
+    if (p === "Marvel") setInstruction("Buat film gaya Marvel 60 detik: bocah pahlawan di kebun binatang futuristik.");
+    if (p === "Pixar") setInstruction("Buat film gaya Pixar 60 detik: pemandu anak lucu di kebun binatang ceria.");
+    if (p === "Anime") setInstruction("Buat film gaya Anime 60 detik: pahlawan kecil di kebun binatang ajaib.");
+    if (p === "Cartoon") setInstruction("Buat film kartun 60 detik: anak kucing ceria bermain di taman.");
+    if (p === "Real Film") setInstruction("Buat film realis 60 detik: pemandu tur di kebun binatang modern.");
   }
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  function generateStoryboardPNG() {
-    const full = jsonOut ? JSON.parse(jsonOut) : buildLocalDraft();
-    const scenesLocal = splitScenesMax8(full);
-    drawStoryboardToCanvasAndDownload({ canvasRef, title: "Storyboard Ultra", scenes: scenesLocal, aspect });
+  function detectLang(s: string): "id-ID" | "en-US" {
+    const low = s.toLowerCase();
+    if (low.indexOf(" yang ") >= 0 || low.indexOf(" anak ") >= 0 || low.indexOf("buat ") === 0) return "id-ID";
+    return "en-US";
+  }
+
+  function genStory() {
+    setError("");
+    try {
+      const lang = detectLang(instruction);
+      const sec = clamp(durationSec || 60, 10, 600);
+      const fps = 30;
+
+      // micro detail
+      const anatomy = buildAnatomy({});
+      const wardrobe = buildWardrobe({});
+      const physio = buildPhysiology({});
+      const env = buildEnvironment({});
+      const microfx = buildMicroFX(style);
+
+      // global JSON
+      const base: any = {
+        version: "2.6",
+        schema: "laras.prompt",
+        intent: "cinematic_storytelling",
+        consistency: {
+          lock: true,
+          design_id: rid("design"),
+          seed: String(Math.floor(Math.random() * 1000000)),
+          look_lock: { face: true, body: true, clothes: true, colors: true }
+        },
+        global: {
+          style: {
+            profile: style,
+            grading: style === "Marvel" ? "epic high contrast" :
+                     style === "Pixar" ? "warm vivid friendly" :
+                     style === "Anime" ? "pastel + sharp line" :
+                     style === "Real Film" ? "cinematic neutral" : "vivid saturation, playful contrast",
+            palette: [
+              { name: "primary", value: "#3B82F6" },
+              { name: "accent", value: "#F59E0B" },
+              { name: "joy", value: "#10B981" }
+            ],
+            lens_default: style === "Real Film" ? "35mm anamorphic" : "30mm toon"
+          },
+          audio: {
+            mix_profile: "film",
+            music_global: style === "Marvel" ? ["orchestral heroic"] :
+                          style === "Pixar" ? ["playful orchestra"] :
+                          style === "Anime" ? ["anime modern"] :
+                          style === "Real Film" ? ["subtle cinematic"] : ["comedy light","quirky mallets"],
+            sfx_global: ["ambient park","soft steps","toy squeak"],
+            voiceover: {
+              language: lang,
+              tone: "narasi anak jelas, ekspresif, sesuai emosi",
+              pace: "110-125 wpm (sesuaikan durasi)"
+            }
+          },
+          safety: {
+            do: ["ramah anak","hindari jumpscare","tone positif","ekspresi lembut","transisi halus"],
+            dont: ["kekerasan","darah","tema dewasa","bahasa kasar","hewan tersakiti"]
+          },
+          output: { resolution: "3840x2160", fps: fps, container: "mp4", audio_channels: "stereo" },
+          microfx: microfx
+        },
+        characters: characters,
+        anatomy: anatomy,
+        wardrobe: wardrobe,
+        physiology: physio,
+        environment_default: env,
+        narrative: { total_seconds: sec }
+      };
+
+      // scenes
+      const chunks = splitDuration(sec);
+      const scenes: any[] = [];
+      for (let i = 0; i < chunks.length; i++) {
+        const sDur = chunks[i];
+        scenes.push({
+          index: i + 1,
+          name: i === 0 ? "Intro" : (i === chunks.length - 1 ? "Outro" : "Scene " + String(i + 1)),
+          seconds: sDur,
+          continuity: { characters: [{ ref: characters[0] && characters[0].character_id, visible: true, notes: "keep outfit/logo/colors" }] },
+          camera: { angle: i === 0 ? "wide" : "medium", movement: i === 0 ? "crane down, dolly-in" : "tracking", lens: base.global.style.lens_default, dof: "deep", framing: i === 0 ? "establishing" : "standard" },
+          environment: { location: "taman bermain ceria", weather: "cerah", textures: ["rumput hijau","langit biru","awan lembut"], props: ["mainan","ayunan","ember pasir"] },
+          lighting: { key: "soft warm", fill: "gentle", rim: "subtle", volumetric: true },
+          action: i === 0 ? "Perkenalan suasana dan karakter utama." : (i === chunks.length - 1 ? "Penutup ramah dan lambaian." : "Aksi ringan sesuai alur."),
+          expressions: "ceria",
+          gestures: ["wave","head nod","eye blink"],
+          lipsync: "dialogue",
+          dialogue: i === 0 ? "Narator: Di taman bermain yang ceria, hiduplah seekor anak kucing bernama Milo." :
+                    (i === chunks.length - 1 ? "Narator: Sampai jumpa di petualangan berikutnya!" : "Narator: Milo bermain dan belajar hal baru."),
+          music_cue: style === "Marvel" ? "heroic light" : (style === "Real Film" ? "subtle underscore" : "playful"),
+          sfx: ["ambient park","soft steps"],
+          micro_details: ["bunga bergoyang","awan bergerak","kilau matahari lembut"]
+        });
+      }
+      base.scenes = scenes;
+
+      // full JSON text
+      setFullJson(JSON.stringify(base, null, 2));
+
+      // per scene JSON array untuk panel copy per-skena
+      const per: Array<{ title: string; obj: any }> = [];
+      for (let j = 0; j < scenes.length; j++) {
+        per.push({
+          title: "scene_" + String(j + 1) + ".json",
+          obj: {
+            version: base.version,
+            schema: base.schema,
+            intent: base.intent,
+            consistency: base.consistency,
+            global: base.global,
+            characters: base.characters,
+            narrative: { total_seconds: scenes[j].seconds },
+            scenes: [ scenes[j] ]
+          }
+        });
+      }
+      setPerScene(per);
+    } catch (e: any) {
+      setError(e && e.message ? e.message : "Unknown error");
+    }
+  }
+
+  // export VO .txt / .md untuk tiap scene
+  function exportAllSceneVO(format: "txt" | "md") {
+    if (!perScene.length) return;
+    const ext = format === "txt" ? ".txt" : ".md";
+    for (let i = 0; i < perScene.length; i++) {
+      const sObj = perScene[i].obj;
+      const sc = Array.isArray(sObj && sObj.scenes) ? sObj.scenes[0] : (sObj && sObj.scenes);
+      if (!sc) continue;
+      const who = (sObj.characters && sObj.characters[0] && sObj.characters[0].display_name) || "Narator";
+      const dial = (sc.dialogue || "").replace(/^["“”]+|["“”]+$/g, "");
+      const text = format === "txt"
+        ? ("Scene " + String(i + 1) + " — Durasi " + String(sc.seconds || 0) + "s\n" + (dial ? ("Dialog (" + who + "): " + dial) : ""))
+        : ("# Scene " + String(i + 1) + "\n\n- Durasi: " + String(sc.seconds || 0) + " detik\n- Dialog (" + who + "): " + (dial || "-") + "\n");
+      downloadText(perScene[i].title.replace(".json", ext), text, "text/plain");
+    }
+  }
+
+  // export Prompt text per scene (bukan JSON)
+  function exportAllSceneTextPrompt() {
+    if (!perScene.length) return;
+    for (let i = 0; i < perScene.length; i++) {
+      const sObj = perScene[i].obj;
+      const prompt = buildPerSceneTextPrompt(sObj);
+      downloadText(perScene[i].title.replace(".json", "_prompt.txt"), prompt, "text/plain");
+    }
+  }
+
+  // storyboard PNG
+  function exportStoryboardPNG() {
+    const scenes = perScene.map(function(ps){ return (ps.obj && ps.obj.scenes && ps.obj.scenes[0]) || null; }).filter(function(x){return !!x;});
+    drawStoryboardToCanvasAndDownload({
+      canvasRef: canvasRef,
+      title: "Storyboard",
+      scenes: scenes,
+      aspect: aspect
+    });
   }
 
   return (
-    <div className="min-h-screen bg-[#0B1220] text-white">
-      <div className="mx-auto max-w-6xl p-4">
-        <header className="flex items-center justify-between mb-4">
+    <div className="min-h-screen bg-neutral-50 text-neutral-900">
+      <div className="mx-auto max-w-5xl p-6">
+        <header className="mb-4 flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ Ultra Detail v2.6 + Objects</h1>
-            <p className="text-xs opacity-70">Ultra-detail anatomy, wardrobe, physiology, environment & objects. Split ≤ 8s/scene.</p>
+            <h1 className="text-2xl font-bold">SMART LARAS — Cinematic Pro+ (Split 8s/scene)</h1>
+            <p className="text-sm text-neutral-600">Auto split per scene (maks 8 detik), export VO .txt/.md, prompt per scene, dan storyboard PNG.</p>
           </div>
           <div className="flex gap-2">
-            <button disabled={!jsonOut} onClick={() => navigator.clipboard.writeText(jsonOut)} className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Copy Full JSON</button>
-            <button disabled={!jsonOut} onClick={() => downloadText(`LARAS_FULL_${Date.now()}.json`, jsonOut, "application/json")} className="px-3 py-2 rounded-xl bg-white/10 disabled:opacity-40">Download Full</button>
+            <button onClick={function(){ if(fullJson) navigator.clipboard.writeText(fullJson); }} disabled={!fullJson} className="rounded-2xl px-4 py-2 shadow bg-neutral-900 text-white disabled:opacity-40">Copy Full JSON</button>
           </div>
         </header>
 
-        <div className="grid lg:grid-cols-2 gap-4">
-          {/* LEFT: FORM */}
-          <section className="rounded-2xl bg-[#0E1626] border border-white/10 p-4 space-y-3">
-            <label className="block text-sm">
-              <div className="mb-1 opacity-80">Deskripsi / Instruksi</div>
-              <textarea value={instruction} onChange={(e) => setInstruction(e.target.value)} rows={4}
-                className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2"
-                placeholder="Ceritakan tujuan video, durasi (menit/detik), gaya, dsb." />
+        <section className="rounded-3xl bg-white p-4 shadow">
+          <div className="flex gap-2 mb-3">
+            <button onClick={function(){presetApply("Marvel");}} className="px-3 py-1 rounded-full bg-red-600 text-white text-sm">Marvel</button>
+            <button onClick={function(){presetApply("Pixar");}} className="px-3 py-1 rounded-full bg-blue-600 text-white text-sm">Pixar</button>
+            <button onClick={function(){presetApply("Anime");}} className="px-3 py-1 rounded-full bg-pink-600 text-white text-sm">Anime</button>
+            <button onClick={function(){presetApply("Cartoon");}} className="px-3 py-1 rounded-full bg-orange-600 text-white text-sm">Cartoon</button>
+            <button onClick={function(){presetApply("Real Film");}} className="px-3 py-1 rounded-full bg-gray-700 text-white text-sm">Real Film</button>
+          </div>
+
+          <label className="block text-sm mb-2">
+            <span className="text-neutral-700">Perintah pengguna</span>
+            <textarea
+              className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2"
+              rows={3}
+              value={instruction}
+              onChange={function(e){setInstruction(e.target.value);}}
+            />
+          </label>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label className="text-sm">
+              <div>Durasi (detik)</div>
+              <input type="number" min={10} max={600} value={durationSec} onChange={function(e){ setDurationSec(parseInt(e.target.value||"60",10)); }} className="w-full rounded-xl border px-3 py-2"/>
             </label>
+            <label className="text-sm">
+              <div>Gaya</div>
+              <select value={style} onChange={function(e){ setStyle(e.target.value as StyleProfile); }} className="w-full rounded-xl border px-3 py-2">
+                <option>Marvel</option>
+                <option>Pixar</option>
+                <option>Anime</option>
+                <option>Cartoon</option>
+                <option>Real Film</option>
+              </select>
+            </label>
+            <label className="text-sm">
+              <div>Aspect</div>
+              <select value={aspect} onChange={function(e){ setAspect(e.target.value); }} className="w-full rounded-xl border px-3 py-2">
+                <option>16:9</option>
+                <option>9:16</option>
+                <option>1:1</option>
+                <option>2.35:1</option>
+              </select>
+            </label>
+          </div>
 
-            <div className="grid md:grid-cols-3 gap-3">
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Style</div>
-                <select value={style} onChange={(e)=>setStyle(e.target.value as StyleKey)} className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2">
-                  <option>Marvel</option><option>Pixar</option><option>Anime</option><option>Cartoon</option><option>Real Film</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Aspect</div>
-                <select value={aspect} onChange={(e)=>setAspect(e.target.value as any)} className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2">
-                  {ARS.map(a=><option key={a}>{a}</option>)}
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Resolusi</div>
-                <select value={resolution} onChange={(e)=>setResolution(e.target.value as any)} className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2">
-                  <option value="4K">4K</option><option value="8K">8K</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">FPS</div>
-                <select value={fps} onChange={(e)=>setFps(Number(e.target.value) as any)} className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2">
-                  <option value={30}>30</option><option value={60}>60</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Mix</div>
-                <select value={mix} onChange={(e)=>setMix(e.target.value as MixProfile)} className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2">
-                  <option value="film">film</option><option value="podcast">podcast</option><option value="ads">ads</option>
-                </select>
-              </label>
-              <label className="text-sm">
-                <div className="mb-1 opacity-80">Jumlah Adegan</div>
-                <input type="number" min={3} max={12} value={scenes} onChange={(e)=>setScenes(Math.min(12,Math.max(3,Number(e.target.value))))}
-                  className="w-full rounded-xl bg-[#0B1220] border border-white/10 px-3 py-2" />
-              </label>
-              <label className="text-sm flex items-center gap-2">
-                <input type="checkbox" checked={modeAman} onChange={(e)=>setModeAman(e.target.checked)} />
-                <span>Mode Aman</span>
-              </label>
-            </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button onClick={genStory} className="rounded-2xl px-4 py-2 shadow bg-neutral-900 text-white">Generate</button>
+            <button onClick={function(){exportAllSceneVO("txt");}} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Export VO .txt</button>
+            <button onClick={function(){exportAllSceneVO("md");}} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Export VO .md</button>
+            <button onClick={exportAllSceneTextPrompt} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Export Prompt per Scene (.txt)</button>
+            <button onClick={exportStoryboardPNG} disabled={!perScene.length} className="rounded-2xl px-4 py-2 shadow bg-white border disabled:opacity-40">Generate Storyboard (PNG)</button>
+          </div>
 
-            <CharacterForm characters={characters} onChange={setCharacters} />
-            <ObjectForm objects={objects} onChange={setObjects} />
+          {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
+        </section>
 
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button onClick={generateLocal} disabled={busy!=="idle"} className="px-4 py-2 rounded-xl bg-emerald-600 disabled:opacity-50">
-                {busy==="local"?"Generating...":"Generate (Lokal)"}
-              </button>
-              <button onClick={generateWithAI} disabled={busy!=="idle"} className="px-4 py-2 rounded-xl bg-indigo-600 disabled:opacity-50">
-                {busy==="ai"?"Boosting...":"AI Boost Generate"}
-              </button>
-              <button onClick={generateStoryboardPNG} className="px-4 py-2 rounded-xl bg-white/10">Generate Storyboard (PNG)</button>
-
-              <button onClick={()=>{
-                const full = jsonOut ? JSON.parse(jsonOut) : buildLocalDraft();
-                downloadText(`VO_GLOBAL_${Date.now()}.txt`, buildGlobalVOText(full), "text/plain");
-              }} className="px-4 py-2 rounded-xl bg-white/10">Export VO .txt</button>
-              <button onClick={()=>{
-                const full = jsonOut ? JSON.parse(jsonOut) : buildLocalDraft();
-                downloadText(`VO_GLOBAL_${Date.now()}.md`, `# VO Script\n\n${buildGlobalVOText(full)}`, "text/markdown");
-              }} className="px-4 py-2 rounded-xl bg-white/10">Export VO .md</button>
-            </div>
-
-            {error && <div className="mt-3 text-xs rounded-xl border border-rose-400 bg-rose-900/20 text-rose-200 p-3">{error}</div>}
-
-            <canvas ref={canvasRef} width={1920} height={1080} className="hidden" />
-          </section>
-
-          {/* RIGHT: PER-SCENE JSON + actions */}
-          <section className="rounded-2xl bg-[#0E1626] border border-white/10 p-4">
-            <h2 className="text-lg font-semibold mb-2">Per-Scene (≤ 8s/scene)</h2>
-
-            {perScene.length===0 && (
-              <div className="rounded-xl bg-[#0B1220] border border-white/10 p-3 text-xs opacity-70">
-                Belum ada output. Tekan <b>Generate</b> terlebih dahulu.
-              </div>
-            )}
-
-            <div className="space-y-3 max-h-[65vh] overflow-auto pr-1">
-              {perScene.map((it, idx) => {
-                const jsonStr = JSON.stringify(it.obj, null, 2);
-                const textPrompt = buildPerSceneTextPrompt(it.obj);
-                const voTxt = buildSceneVOText(it.obj);
-                return (
-                  <div key={idx} className="rounded-xl bg-[#0B1220] border border-white/10">
-                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-white/10">
-                      <div className="text-xs font-semibold">{it.title}</div>
-                      <div className="flex flex-wrap gap-2">
-                        <button onClick={()=>navigator.clipboard.writeText(jsonStr)} className="text-xs px-2 py-1 rounded bg-white/10">Copy JSON</button>
-                        <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}.json`, jsonStr, "application/json")} className="text-xs px-2 py-1 rounded bg-white/10">Download JSON</button>
-
-                        <button onClick={()=>navigator.clipboard.writeText(textPrompt)} className="text-xs px-2 py-1 rounded bg-white/10">Copy Prompt</button>
-                        <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}_prompt.txt`, textPrompt, "text/plain")} className="text-xs px-2 py-1 rounded bg-white/10">Prompt .txt</button>
-
-                        <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}_VO.txt`, voTxt, "text/plain")} className="text-xs px-2 py-1 rounded bg-white/10">VO .txt</button>
-                        <button onClick={()=>downloadText(`scene_${String(idx+1).padStart(2,"0")}_VO.md`, `### Scene ${idx+1} VO\n\n${voTxt}`, "text/markdown")} className="text-xs px-2 py-1 rounded bg-white/10">VO .md</button>
-                      </div>
+        <section className="mt-4 rounded-3xl bg-white p-4 shadow">
+          <h2 className="text-lg font-semibold mb-2">Per-Scene JSON (maks 8 detik/scene)</h2>
+          {!perScene.length ? <div className="text-sm text-neutral-600">Belum ada. Klik Generate dulu.</div> : null}
+          <div className="grid md:grid-cols-2 gap-3">
+            {perScene.map(function(ps, idx){
+              const content = JSON.stringify(ps.obj, null, 2);
+              return (
+                <div key={ps.title} className="border rounded-xl p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="font-semibold text-sm">{ps.title}</div>
+                    <div className="flex gap-2">
+                      <button onClick={function(){ navigator.clipboard.writeText(content); }} className="text-xs px-2 py-1 rounded bg-neutral-900 text-white">Copy</button>
+                      <button onClick={function(){
+                        const blob = new Blob([content], {type: "application/json"});
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url; a.download = ps.title;
+                        document.body.appendChild(a); a.click(); a.remove();
+                        URL.revokeObjectURL(url);
+                      }} className="text-xs px-2 py-1 rounded bg-white border">Download</button>
                     </div>
-                    <pre className="text-[11px] whitespace-pre-wrap p-3">{jsonStr}</pre>
                   </div>
-                );
-              })}
-            </div>
-          </section>
-        </div>
+                  <pre className="whitespace-pre-wrap text-xs bg-neutral-900 text-neutral-100 p-3 rounded-xl max-h-64 overflow-auto">{content}</pre>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-3xl bg-white p-4 shadow">
+          <h2 className="text-lg font-semibold mb-2">Full JSON (gabungan)</h2>
+          <pre className="whitespace-pre-wrap text-xs bg-neutral-900 text-neutral-100 p-4 rounded-2xl overflow-auto max-h-[50vh]">{fullJson || "// Belum ada. Klik Generate."}</pre>
+        </section>
+
+        <canvas ref={canvasRef} width={1800} height={1200} style={{display:"none"}} />
       </div>
     </div>
   );
