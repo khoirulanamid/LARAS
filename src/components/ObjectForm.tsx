@@ -13,10 +13,9 @@ export type UIObject = {
 };
 
 function rid(p: string) {
-  return `${p}_${Math.random().toString(36).slice(2, 10)}`;
+  return ${p}_${Math.random().toString(36).slice(2, 10)};
 }
 
-// helper utk mengubah list UIObject → field environment
 export function flattenObjectsToEnv(list: UIObject[]) {
   const flora: string[] = [];
   const fauna: string[] = [];
@@ -35,10 +34,7 @@ export function flattenObjectsToEnv(list: UIObject[]) {
     else if (o.kind === "prop") props.push(text);
     else if (o.kind === "sfx") { if (o.sfx) sfx.push(o.sfx); else sfx.push(text); }
     else if (o.kind === "particles") { if (o.particles) particles.push(o.particles); else particles.push(text); }
-    else if (o.kind === "effect") {
-      // effect bisa masuk ke particles agar terlihat (atau ke micro_details di scene)
-      particles.push(text);
-    }
+    else if (o.kind === "effect") { particles.push(text); }
   });
 
   return { flora, fauna, props, sfx, particles };
@@ -57,10 +53,7 @@ export default function ObjectForm({
     onChange(next);
   }
   function add(kind: UIObject["kind"]) {
-    onChange([
-      ...objects,
-      { id: rid("obj"), kind, name: "New Item" } as UIObject,
-    ]);
+    onChange([...objects, { id: rid("obj"), kind, name: "New Item" } as UIObject]);
   }
   function remove(i: number) {
     const next = objects.filter((_, idx) => idx !== i);

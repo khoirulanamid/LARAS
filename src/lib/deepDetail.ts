@@ -3,8 +3,8 @@
 
 export type AnatomyDetail = {
   height_cm?: number;
-  body_type?: string;                 // slim / average / athletic / chubby / muscular / child-proportion
-  skin_tone?: string;                 // hex or descriptor
+  body_type?: string;
+  skin_tone?: string;
   facial: {
     eyes: { shape?: string; iris_color?: string; pupil_shape?: string; sclera_tint?: string; eyelashes?: string };
     eyebrows?: { shape?: string; thickness?: string; density?: string };
@@ -17,23 +17,23 @@ export type AnatomyDetail = {
   hair: { style?: string; length?: string; color?: string; strand_detail?: string; dynamics?: string };
   hands: { fingernails?: string; knuckle_detail?: string; finger_proportion?: string };
   feet: { toenails?: string; ankle_detail?: string };
-  muscle_definition?: string;         // e.g., "soft child anatomy", "subtle"
-  curvature_detail?: string;          // body curves description
+  muscle_definition?: string;
+  curvature_detail?: string;
 };
 
 export type WardrobeDetail = {
   top?: { type?: string; color?: string; color_detail?: string; material?: string; texture?: string; fit?: string; pattern?: string; trim?: string };
   bottom?: { type?: string; color?: string; color_detail?: string; material?: string; texture?: string; fit?: string; pattern?: string; hem?: string };
   footwear?: { type?: string; color?: string; material?: string; sole?: string; laces?: string };
-  accessories?: string[];             // list of accessories with color/material
+  accessories?: string[];
 };
 
 export type PhysiologyDetail = {
   breathing?: { style?: string; cadence?: string; chest_motion?: string };
   gait?: { style?: string; cadence?: string; foot_impact?: string; hip_shift?: string };
   speech?: { style?: string; articulation?: string; speed?: string; warmth?: string };
-  micro_facial?: string[];            // blinks, micro-smiles, brow micro-motions
-  cloth_sim?: string;                 // how fabric reacts to motion/wind
+  micro_facial?: string[];
+  cloth_sim?: string;
 };
 
 export type EnvDetail = {
@@ -45,12 +45,11 @@ export type EnvDetail = {
   fauna?: string[];
   props?: string[];
   ambient_sfx?: string[];
-  particles?: string[];               // dust motes, leaf specks, insects
+  particles?: string[];
 };
 
 const SAFE = (s?: string) => (s && s.trim().length ? s : undefined);
 
-// ----- Builders with defaults (child-friendly) -----
 export function buildAnatomy(seed: Partial<AnatomyDetail> = {}): AnatomyDetail {
   return {
     height_cm: seed.height_cm ?? 120,
@@ -88,7 +87,7 @@ export function buildAnatomy(seed: Partial<AnatomyDetail> = {}): AnatomyDetail {
       },
     },
     hair: {
-      style: seed.hair?.style ?? "short kitten-fur style / bob for human-like",
+      style: seed.hair?.style ?? "short kitten-fur style",
       length: seed.hair?.length ?? "short",
       color: seed.hair?.color ?? "orange ginger",
       strand_detail: seed.hair?.strand_detail ?? "visible soft strands",
