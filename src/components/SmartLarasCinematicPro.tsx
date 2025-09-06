@@ -15,7 +15,6 @@ function download(name: string, data: any) {
   a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
 
-// alternatif ringan: NDJSON gabungan semua scene (kalau mau ZIP, nanti bisa tambah JSZip)
 async function downloadScenesNdjson(items: {name:string, data:any}[], file='per_scene.ndjson'){
   const nd = items.map(x=> JSON.stringify({ name:x.name, data:x.data })).join('\n')
   const blob = new Blob([nd], { type: 'application/x-ndjson' })
@@ -24,9 +23,10 @@ async function downloadScenesNdjson(items: {name:string, data:any}[], file='per_
 }
 
 export default function SmartLarasCinematicPro() {
-  // minimal controls; durasi fixed 8 detik
+  // durasi per scene fixed 8 detik; model diset internal & disembunyikan
+  const HIDDEN_MODEL = 'gemini-1.5-pro'
+
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('gemini-1.5-pro')
   const [title, setTitle] = useState('Kartun Edukasi Anak')
   const [scenes, setScenes] = useState(20)
 
@@ -34,39 +34,38 @@ export default function SmartLarasCinematicPro() {
   const [tab, setTab] = useState<'full'|'per'>('full')
   const [out, setOut] = useState<OutShape|null>(null)
   const [error, setError] = useState<string|undefined>()
-  const [modelUsed, setModelUsed] = useState<string>('')
-  const [switchNote, setSwitchNote] = useState<string>('')
   const [check, setCheck] = useState<ValidationResult|null>(null)
+  const [toast, setToast] = useState<string|undefined>()
 
   useEffect(()=>{ const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k) },[])
   function saveKey(k:string){ setApiKey(k); localStorage.setItem('GEMINI_KEY', k) }
+  function showToast(msg:string){ setToast(msg); setTimeout(()=>setToast(undefined), 2400) }
 
   const canGo = useMemo(()=> apiKey.trim().length>20 && scenes>0 && title.trim().length>1, [apiKey, scenes, title])
 
-  /** PROMPT — konsistensi ketat, lebih natural, ada Intro & Outro (bukan putri) */
   function buildPrompt(){
     return `
-KELUARKAN JSON SAJA (tanpa teks tambahan) dengan bentuk persis:
+KELUARKAN JSON SAJA (tanpa teks tambahan) dengan bentuk:
 { "full": { ... }, "per_scene": [ ... ] }
 
 Judul: "${title}"
 Jumlah scene: ${scenes}
-Durasi setiap scene: 8 (tuliskan sebagai "durationSec": 8 di tiap scene)
+Durasi setiap scene: 8 (gunakan "durationSec": 8 di tiap scene)
 
 WAJIB:
-- Scene pertama bertag "Intro" (perkenalan & hook).
-- Scene terakhir bertag "Outro" (penutup & ringkasan).
-- Konsistensi keras: karakter & lokasi punya id tetap (roster[].id dan locations[].id), dan scene memakai "ref" & "location_id" yang sesuai roster/locations.
-- Visual karakter stabil (rambut, mata+pupil, kulit, baju[model+hex], celana/rok[model+hex], sepatu — tidak berubah antar scene).
+- Scene pertama bertag "Intro".
+- Scene terakhir bertag "Outro".
+- Konsistensi keras: roster[].id & locations[].id dipakai ulang via "ref"/"location_id".
+- Visual karakter stabil (rambut, mata+pupil, kulit, baju[model+hex], celana/rok[model+hex], sepatu) — tidak berubah antar scene.
 
-GAYA CERITA (hindari kaku):
+GAYA CERITA (lebih natural, tidak kaku):
 - Beat sinematik: setup → inciting incident → rising actions → midpoint → escalation → climax → resolution → outro.
-- Dialog alami, ringkas, ramah anak. Selipkan humor halus (tanpa slapstick berlebihan).
-- Show-don't-tell: tindakan & ekspresi menggambarkan emosi.
-- Kamera bervariasi (wide/close, pan/tilt/dolly/tracking), komposisi (rule_of_thirds/leading_lines), lensa realistis 24–50mm.
-- Audio: musik ramah anak (fade saat dialog), SFX relevan (langkah kaki, angin, pintu, tawa).
+- Dialog alami & ringkas; humor halus ramah anak.
+- Show-don't-tell; ekspresi/gesture natural.
+- Kamera bervariasi (wide/close, pan/tilt/dolly/tracking), komposisi (rule_of_thirds/leading_lines), lensa 24–50mm.
+- Audio: musik ramah anak (fade saat dialog), SFX relevan.
 
-BENTUK WAJIB:
+BENTUK:
 {
   "full": {
     "version": "3.2",
@@ -77,32 +76,23 @@ BENTUK WAJIB:
       "seed": "auto",
       "look_lock": { "face": true, "body": true, "clothes": true, "colors": true }
     },
-    "roster": [
-      /* daftar karakter lengkap + atribut visual (warna hex) */
-    ],
-    "locations": [
-      /* contoh: loc_rumah_1, loc_rumah_2, loc_sekolah, loc_taman, loc_jalan */
-    ],
+    "roster": [ /* daftar karakter + atribut visual lengkap (hex) */ ],
+    "locations": [ /* loc_rumah_1, loc_rumah_2, loc_sekolah, loc_taman, loc_jalan */ ],
     "audio": { "mix_profile":"film", "music_global":["ramah_anak"], "sfx_global":["langkah_kaki","kicau_burung"] },
     "scenes": [
-      {
-        "id":"S001","tag":"Intro","durationSec":8,
-        "location_id":"loc_rumah_1",
+      { "id":"S001","tag":"Intro","durationSec":8, "location_id":"loc_rumah_1",
         "camera":{"frame":"wide","lens":"28mm","movement":"slow_push_in","composition":"rule_of_thirds"},
         "characters":[{"ref":"char_utama","pose":"...","expression":"...","action":"..."}],
         "dialog":[{"ref":"char_utama","text":"..."}],
-        "sfx":["angin_sepoi"],"music_cue":"intro_warm","notes":"perkenalan & hook"
-      }
-      /* total ${scenes} scene. Pastikan alur mengalir sesuai beat, lalu Outro di scene terakhir */
+        "sfx":["angin_sepoi"], "music_cue":"intro_warm", "notes":"perkenalan & hook" }
+      /* total ${scenes} scene; akhir = Outro */
     ]
   },
-  "per_scene": [
-    /* salin seluruh scene satu-per-objek, sama persis dengan 'scenes' */
-  ]
+  "per_scene": [ /* salin semua scene satu-per-objek, sama dengan 'scenes' */ ]
 }
 
 WAJIBKAN:
-- Semua "durationSec" harus = 8.
+- Semua "durationSec" = 8.
 - Semua "characters[].ref" ada di "roster".
 - Semua "location_id" ada di "locations".
 - Id scene berurutan S001..S${String(scenes).padStart(3,'0')}
@@ -111,19 +101,12 @@ WAJIBKAN:
 
   async function onGenerate(){
     try{
-      setLoading(true); setError(undefined); setOut(null); setModelUsed(''); setSwitchNote(''); setCheck(null)
-      const data = await callGeminiStrict({ apiKey, model, prompt: buildPrompt() }) as OutShape
+      setLoading(true); setError(undefined); setOut(null); setCheck(null)
+      const data = await callGeminiStrict({ apiKey, model: HIDDEN_MODEL, prompt: buildPrompt() }) as OutShape
       if (!data?.full || !Array.isArray(data?.per_scene)) throw new Error('Output tidak sesuai { full, per_scene }')
       setOut(data)
-      const attempts = data.__meta?.attempts || []
-      if (attempts.length){
-        setModelUsed(attempts[attempts.length-1].modelTried)
-        const switched = attempts.find(a=>a.switched)
-        if (switched) setSwitchNote(`Model berpindah otomatis (${attempts.map(a=>a.modelTried).join(' → ')})${switched.reason ? ` karena ${switched.reason}`:''}`)
-      }
-      // Validasi konsistensi
-      const report = validateStory(data, scenes)
-      setCheck(report)
+      setCheck(validateStory(data, scenes))
+      showToast('Generated')
     }catch(e:any){
       setError(e?.message || 'Unknown error')
     }finally{ setLoading(false) }
@@ -137,96 +120,105 @@ WAJIBKAN:
   }))
 
   return (
-    <div className="layout">
-      {/* LEFT: form sticky */}
-      <div className="left card">
-        <div className="section-title">Story Controls (Sederhana)</div>
-        <div className="kv">
-          <label>Gemini API Key</label>
-          <input type="text" placeholder="Tempel API Key di sini (AIza...)" value={apiKey} onChange={(e)=>saveKey(e.target.value)} />
-          <small className="helper">Disimpan lokal. Jangan bagikan.</small>
+    <>
+      {toast && <div className="toast">{toast}</div>}
 
-          <label>Judul</label>
-          <input type="text" placeholder="Contoh: Kartun Edukasi Anak" spellCheck={false} value={title} onChange={(e)=>setTitle(e.target.value)} required />
+      <div className="layout">
+        {/* LEFT: form sticky */}
+        <div className="left card">
+          <div className="section-title">Story Controls</div>
+          <div className="kv">
+            <label>Gemini API Key</label>
+            <input type="text" placeholder="Tempel API Key di sini (AIza...)" value={apiKey} onChange={(e)=>saveKey(e.target.value)} />
+            <small className="helper">Disimpan lokal (localStorage). Jangan bagikan ke publik.</small>
 
-          <label>Jumlah Scene</label>
-          <input type="number" placeholder="20" inputMode="numeric" min={1} max={200} step={1} value={scenes} onChange={(e)=>setScenes(Number(e.target.value||1))} required />
-          <small className="helper">Durasi per scene otomatis <b>8 detik</b>.</small>
+            <label>Judul</label>
+            <input type="text" placeholder="Contoh: Kartun Edukasi Anak" spellCheck={false} value={title} onChange={(e)=>setTitle(e.target.value)} required />
 
-          <label>Model awal</label>
-          <input type="text" placeholder="gemini-1.5-pro" value={model} onChange={(e)=>setModel(e.target.value)} />
-          <small className="helper">Jika quota habis → fallback ke 1.5-flash → 2.0-flash.</small>
+            <label>Jumlah Scene</label>
+            <input type="number" placeholder="20" inputMode="numeric" min={1} max={200} step={1} value={scenes} onChange={(e)=>setScenes(Number(e.target.value||1))} required />
+
+            <small className="helper">Durasi per-scene otomatis <b>8 detik</b>. Output: <b>FULL</b> & <b>PER-SCENE</b>.</small>
+          </div>
+
+          <div className="row" style={{marginTop:14}}>
+            <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
+              {loading && <span className="spinner" />} {loading ? 'Generating…' : 'Generate'}
+            </button>
+          </div>
+
+          {check && (
+            <div style={{marginTop:12}}>
+              <div className="section-title">Validation</div>
+              <div className="kv" style={{gridTemplateColumns:'1fr'}}>
+                <small className="helper" style={{marginTop:0}}>
+                  {check.ok ? '✅ Lolos pemeriksaan dasar.' : '⚠️ Ada catatan:'}
+                  <ul style={{marginTop:6}}>
+                    {check.messages.map((m,i)=>(<li key={i}>{m}</li>))}
+                  </ul>
+                </small>
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="row" style={{marginTop:14}}>
-          {modelUsed && <span className="badge">Model: {modelUsed}</span>}
-          <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
-            {loading ? 'Generating…' : 'Generate'}
-          </button>
-        </div>
-
-        {switchNote && <div className="note" style={{marginTop:8}}>⚠️ {switchNote}</div>}
-
-        {check && (
-          <div style={{marginTop:12}}>
-            <div className="section-title">Validation</div>
-            <div className="note">
-              {check.ok ? '✅ Lolos pemeriksaan dasar.' : '⚠️ Ada catatan:'}
-              <ul>
-                {check.messages.map((m,i)=>(<li key={i}>{m}</li>))}
-              </ul>
+        {/* RIGHT: output (fixed height + scroll) */}
+        <div className="card">
+          <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
+            <div className="tabs">
+              <div className={`tab ${tab==='full'?'active':''}`} onClick={()=>setTab('full')}>FULL JSON</div>
+              <div className={`tab ${tab==='per'?'active':''}`} onClick={()=>setTab('per')}>PER-SCENE JSON</div>
+            </div>
+            <div className="row">
+              {tab==='full' ? (
+                <>
+                  <button className="button secondary" disabled={!out}
+                    onClick={()=>{ copy(fullText); showToast('Copied FULL'); }}>Copy</button>
+                  <button className="button ghost" disabled={!out}
+                    onClick={()=>{ download('full.json', out!.full); showToast('Downloaded FULL'); }}>Download</button>
+                </>
+              ) : (
+                <>
+                  <button className="button secondary" disabled={!out}
+                    onClick={()=>{ copy(perText); showToast('Copied PER-SCENE'); }}>Copy Semua</button>
+                  <button className="button ghost" disabled={!out}
+                    onClick={()=>{ download('per_scene.json', out!.per_scene); showToast('Downloaded per_scene.json'); }}>Download Semua</button>
+                  <button className="button" disabled={!sceneFiles.length}
+                    onClick={()=>{ downloadScenesNdjson(sceneFiles); showToast('Downloaded per_scene.ndjson'); }}>
+                    Per-Scene (gabung)
+                  </button>
+                </>
+              )}
             </div>
           </div>
-        )}
-      </div>
 
-      {/* RIGHT: output (tinggi tetap + scroll) */}
-      <div className="card">
-        <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
-          <div className="tabs">
-            <div className={`tab ${tab==='full'?'active':''}`} onClick={()=>setTab('full')}>FULL JSON</div>
-            <div className={`tab ${tab==='per'?'active':''}`} onClick={()=>setTab('per')}>PER-SCENE JSON</div>
-          </div>
-          <div className="row">
-            {tab==='full' ? (
-              <>
-                <button className="button secondary" disabled={!out} onClick={()=>copy(fullText)}>Copy</button>
-                <button className="button ghost" disabled={!out} onClick={()=>download('full.json', out!.full)}>Download</button>
-              </>
-            ) : (
-              <>
-                <button className="button secondary" disabled={!out} onClick={()=>copy(perText)}>Copy Semua</button>
-                <button className="button ghost" disabled={!out} onClick={()=>download('per_scene.json', out!.per_scene)}>Download Semua</button>
-                <button className="button" disabled={!sceneFiles.length} onClick={()=>downloadScenesNdjson(sceneFiles)}>Per-Scene (gabung)</button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {tab==='per' && (
-          <div className="list">
-            {(sceneFiles.length===0) ? (
-              <div className="item"><span>Tidak ada scene.</span></div>
-            ) : sceneFiles.map((f, idx)=>(
-              <div className="item" key={idx}>
-                <span>{f.name}</span>
-                <div className="row">
-                  <button className="button secondary" onClick={()=>copy(JSON.stringify(f.data,null,2))}>Copy</button>
-                  <button className="button ghost" onClick={()=>download(f.name, f.data)}>Download</button>
+          {tab==='per' && (
+            <div className="list">
+              {(sceneFiles.length===0) ? (
+                <div className="item"><span>Tidak ada scene.</span></div>
+              ) : sceneFiles.map((f, idx)=>(
+                <div className="item" key={idx}>
+                  <span>{f.name}</span>
+                  <div className="row">
+                    <button className="button secondary"
+                      onClick={()=>{ copy(JSON.stringify(f.data,null,2)); showToast(`Copied ${f.name}`) }}>Copy</button>
+                    <button className="button ghost"
+                      onClick={()=>{ download(f.name, f.data); showToast(`Downloaded ${f.name}`) }}>Download</button>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          )}
 
-        <div className="output" style={{marginTop:10}}>
-          { error
-            ? `❌ ${error}`
-            : out
-              ? (tab==='full' ? fullText : perText)
-              : 'Belum ada output. Klik Generate.' }
+          <div className="output" style={{marginTop:10}}>
+            { error
+              ? `❌ ${error}`
+              : out
+                ? (tab==='full' ? fullText : perText)
+                : 'Belum ada output. Klik Generate.' }
+          </div>
         </div>
       </div>
-    </div>
+    </>
   )
 }

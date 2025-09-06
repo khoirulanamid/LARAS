@@ -5,7 +5,7 @@ export default function App() {
     <div className="container">
       <div className="header">
         <div className="brand">
-          <div className="logo">L</div>
+          <img src="/logo.svg" alt="LARAS" />
           <div>
             <div style={{fontWeight:900, letterSpacing:.3}}>LARAS Cinematic Pro</div>
             <a href="https://khoirulanamid.github.io/LARAS" target="_blank" rel="noreferrer">

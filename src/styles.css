@@ -18,11 +18,11 @@ body{
 .container{max-width:1240px;margin:28px auto;padding:0 16px}
 .header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
 .brand{display:flex;align-items:center;gap:10px}
-.logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#42a5f5,#7c3aed);display:flex;align-items:center;justify-content:center;font-weight:900}
+.brand img{width:28px;height:28px;border-radius:8px;display:block}
 .brand a{color:#9fb6ff;text-decoration:none;font-size:13px}
 .badge{font-size:12px;padding:6px 10px;border-radius:999px;border:1px solid var(--edge);color:#a5b4fc;background:rgba(165,180,252,.08)}
 
-/* 2 kolom — kiri sticky agar tidak ikut geser */
+/* layout: kiri sticky agar tidak ikut turun saat output panjang */
 .layout{display:grid;grid-template-columns: 420px 1fr;gap:18px}
 .left{position:sticky;top:16px;height:fit-content}
 .card{
@@ -32,42 +32,66 @@ body{
 }
 .section-title{font-weight:900;letter-spacing:.3px;margin-bottom:10px}
 
-/* Form */
+/* form */
 .kv{display:grid;grid-template-columns:120px 1fr;gap:10px 12px;align-items:center}
 .kv label{color:var(--muted);font-size:13px}
-input[type="text"],input[type="number"],textarea{
+input[type="text"],input[type="number"]{
   width:100%;background:var(--fg);color:var(--text);
   border:1px solid var(--edge);border-radius:12px;padding:10px 12px;outline:none
 }
 input[type="number"]{appearance:textfield}
-textarea{min-height:110px;resize:vertical}
-small.helper{color:var(--muted);display:block;margin-top:6px}
+.kv small.helper{color:var(--muted);grid-column:1 / -1; margin-top:-4px} /* helper full-row */
 
 .row{display:flex;gap:10px;flex-wrap:wrap}
-.button{padding:10px 14px;border-radius:10px;border:1px solid var(--edge);background:var(--accent);color:#002030;font-weight:800;cursor:pointer}
-.button.secondary{background:#0d2535;color:#cde8ff}
-.button.ghost{background:transparent;color:var(--text)}
+
+/* buttons + animations */
+.button{
+  padding:10px 14px;border-radius:10px;border:1px solid var(--edge);
+  background:var(--accent);color:#002030;font-weight:800;cursor:pointer;
+  transition: transform .08s ease, box-shadow .2s ease, opacity .2s ease;
+  box-shadow:0 6px 14px rgba(62,199,255,.25);
+}
+.button:hover{ transform: translateY(-1px) }
+.button:active{ transform: translateY(0) scale(.98) }
+.button.secondary{background:#0d2535;color:#cde8ff;box-shadow:none}
+.button.ghost{background:transparent;color:var(--text);box-shadow:none}
 .button[disabled]{opacity:.55;cursor:not-allowed}
 
-/* Tabs + Output */
-.tabs{display:flex;gap:8px}
-.tab{padding:8px 12px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;background:#0d1b28;color:#cdd7e3;font-weight:600}
-.tab.active{background:#142538}
+/* spinner */
+.spinner{
+  width:14px;height:14px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.35); border-top-color:#fff; margin-right:8px;
+  animation: spin 1s linear infinite; display:inline-block; vertical-align:-2px;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-/* FIX penting: output digulung, tinggi tetap — form kiri tidak ketarik */
+/* Tabs + Output (fixed height + scroll) */
+.tabs{display:flex;gap:8px}
+.tab{padding:8px 12px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;background:#0d1b28;color:#cdd7e3;font-weight:600;transition:transform .08s}
+.tab:hover{transform:translateY(-1px)}
+.tab.active{background:#142538}
 .output{
   background:#0a121a;border:1px dashed var(--edge);border-radius:12px;padding:12px;
-  height:520px;
-  overflow:auto; white-space:pre-wrap; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace
+  height:520px; overflow:auto; white-space:pre-wrap;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace
 }
-.note{font-size:12px;color:var(--muted)}
 
-/* List per-scene */
+/* list per-scene */
 .list{margin-top:8px;max-height:260px;overflow:auto;border:1px solid var(--edge);border-radius:12px}
 .item{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--edge);padding:8px 10px}
 .item:last-child{border-bottom:0}
 
-/* Responsive */
+/* toast */
+.toast{
+  position:fixed; right:16px; top:16px; z-index:50;
+  background:rgba(15,23,42,.9); color:#e2e8f0; border:1px solid var(--edge);
+  padding:10px 12px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.4);
+  animation: toast-in .2s ease, toast-out .2s ease 2.2s forwards;
+}
+@keyframes toast-in{from{transform:translateY(-6px); opacity:0} to{transform:none; opacity:1}}
+@keyframes toast-out{to{transform:translateY(-6px); opacity:0}}
+
+/* responsive */
 @media (max-width: 900px){
   .layout{grid-template-columns: 1fr}
   .left{position:static}
