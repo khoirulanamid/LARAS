@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Wajib: sesuaikan dengan nama repo GitHub Pages-mu
+// Sesuaikan base dengan nama repo Pages
 export default defineConfig({
   plugins: [react()],
   base: '/LARAS/'

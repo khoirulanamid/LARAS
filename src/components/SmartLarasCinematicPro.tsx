@@ -1,21 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { callGeminiStrict } from '../lib/aiClient'
 
-type OutShape = {
-  full: any
-  per_scene: any[]
-}
+type OutShape = { full:any; per_scene:any[]; __meta?: { attempts: { modelTried:string; switched?:boolean; reason?:string }[] } }
 
-function copy(text: string) {
-  navigator.clipboard.writeText(text)
-}
-
+function copy(text: string) { navigator.clipboard.writeText(text) }
 function download(name: string, data: any) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url; a.download = name; a.click()
-  URL.revokeObjectURL(url)
+  const url = URL.createObjectURL(blob); const a = document.createElement('a')
+  a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
 
 export default function SmartLarasCinematicPro() {
@@ -26,7 +18,7 @@ export default function SmartLarasCinematicPro() {
   const [secPerScene, setSecPerScene] = useState(8)
   const [designId, setDesignId] = useState('kids_enviro_v1')
   const [seed, setSeed] = useState('782364')
-  const [mainChars, setMainChars] = useState('Ari, Beni, Citra') // tiga anak
+  const [mainChars, setMainChars] = useState('Ari, Beni, Citra')
   const [support, setSupport] = useState('Kucing Piko; Burung kecil; Tetangga Pak Tani')
   const [locations, setLocations] = useState('Rumah Ari; Rumah Beni; Rumah Citra; SD 05; Taman kota; Jalan depan rumah')
   const [userNotes, setUserNotes] = useState('Fokus edukasi: hemat air & buang sampah di tempatnya. Humor sopan. Tanpa kekerasan.')
@@ -35,10 +27,10 @@ export default function SmartLarasCinematicPro() {
   const [tab, setTab] = useState<'full'|'per'>('full')
   const [out, setOut] = useState<OutShape|null>(null)
   const [error, setError] = useState<string|undefined>()
+  const [modelUsed, setModelUsed] = useState<string>('')
+  const [switchNote, setSwitchNote] = useState<string>('')
 
-  useEffect(() => {
-    const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k)
-  }, [])
+  useEffect(() => { const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k) }, [])
   function saveKey(k:string){ setApiKey(k); localStorage.setItem('GEMINI_KEY', k) }
 
   const canGo = useMemo(() =>
@@ -46,92 +38,57 @@ export default function SmartLarasCinematicPro() {
 
   function buildPrompt(){
     return `
-Kamu adalah "LARAS Story Orchestrator", tim profesional 1000 orang dalam satu otak.
-Tugas: hasilkan JSON *ketat schema* untuk pembuatan animasi/film/iklan/podcast/berita yang sangat presisi.
+Kamu adalah "LARAS Story Orchestrator".
+OUTPUT KETAT: JSON saja { "full":{...}, "per_scene":[...] }.
+Wajib ${scenes} scene; durasi tiap scene ${secPerScene} detik; ID karakter & lokasi konsisten.
 
-### KONSISTENSI WAJIB (LOCK)
-- design_id: "${designId}" ; seed: "${seed}"
-- Semua karakter utama dan pendamping memiliki ID PERSIS sama di setiap scene.
-- Atribut TERKUNCI dan HARUS sama di seluruh scene:
-  rambut (bentuk/warna/panjang), muka (bentuk/proporsi), mata (warna/pupil), hidung, telinga,
-  tangan, tubuh, kaki; baju (model, warna hex spesifik), celana/rok (model, warna hex spesifik), sepatu.
-- Ekspresi/aksi: saat bicara/tertawa/dll tetap sesuai karakter (boleh berubah sesuai adegan tapi identitas visual tidak berubah).
-- Rumah/lingkungan/objek penting (mis: rumah Ari/Beni/Citra, langit, taman kota) punya ID lokasi persisten dengan ciri visual yang konsisten.
+### LOCK
+design_id="${designId}", seed="${seed}", look_lock={face:true,body:true,clothes:true,colors:true}
+- Kunci sifat visual: rambut, muka, mata (warna+pupil), hidung, telinga, tangan, tubuh, kaki, baju (model+hex), celana/rok (model+hex), sepatu.
+- Karakter dan lokasi punya id persisten: contoh char_ari, loc_rumah_ari.
 
-### METADATA CERITA
-- judul: "${title}"
-- jumlah_scene: ${scenes}
-- durasi_per_scene_detik: ${secPerScene}
-- karakter_utama: ${mainChars}
-- karakter_pendamping/hewannya: ${support}
-- lokasi_utama: ${locations}
-- catatan_user: ${userNotes}
+### METADATA
+judul="${title}"
+karakter_utama=${mainChars}
+pendamping_hewannya=${support}
+lokasi=${locations}
+catatan="${userNotes}"
 
 ### AUDIO & KAMERA
-- Audio global: mix_profile "film", musik ramah anak, SFX relevan (langkah kaki, daun, kicau burung, dll).
-- Kamera: gunakan deskripsi sinematik; tuliskan per scene (frame, lensa, gerak kamera, komposisi).
-- Dialog: sopan, edukatif, mudah dimengerti anak.
+Audio global filmic, musik ramah anak, SFX relevan. Kamera tulis per scene (frame, lensa, movement, composition).
+Dialog edukatif & sopan.
 
-### OUTPUT STRICT (WAJIB)
-HANYA output JSON *tanpa teks lain*, dengan bentuk:
+### BENTUK
 {
-  "full": {
-    "version": "3.0",
-    "schema": "laras.story",
-    "consistency": {
-      "lock": true,
-      "design_id": "${designId}",
-      "seed": "${seed}",
-      "look_lock": { "face": true, "body": true, "clothes": true, "colors": true }
-    },
-    "roster": [
-      {
-        "id": "char_ari", "name": "Ari",
-        "visual": { "hair": {"style":"...", "color":"#..."}, "eyes":{"color":"#...", "pupil":"..."}, "skin_tone":"...", "top":{"model":"...", "color":"#..."}, "bottom":{"model":"...", "color":"#..."}, "shoes":{"model":"...", "color":"#..."} },
-        "personality": "..."
-      }
-      // isi lengkap untuk semua karakter (termasuk pendamping & hewan)
-    ],
-    "locations": [
-      { "id":"loc_rumah_ari", "name":"Rumah Ari", "visual_key":"...", "palette":["#...", "#..."] }
-      // isi lengkap semua lokasi penting
-    ],
-    "audio": {
-      "mix_profile":"film",
-      "music_global":["..."],
-      "sfx_global":["langkah_kaki","kicau_burung","daun_tertiup"]
-    },
-    "scenes": [
-      {
-        "id":"S001",
-        "durationSec": ${secPerScene},
-        "camera": { "frame":"...", "lens":"28mm", "movement":"pan/tilt/dolly", "composition":"rule_of_thirds" },
-        "location_id":"loc_rumah_ari",
-        "characters":[{"ref":"char_ari","pose":"...", "expression":"...", "action":"..."}],
-        "dialog":[{"ref":"char_ari","text":"..."}],
-        "sfx":["..."], "music_cue":"...", "notes":""
-      }
-      // total ${scenes} scene
-    ]
-  },
-  "per_scene": [
-    // array berisi objek scene yang sama persis dengan 'scenes' di atas, namun dipisah per item
-  ]
+ "full": {
+   "version":"3.0","schema":"laras.story",
+   "consistency":{"lock":true,"design_id":"${designId}","seed":"${seed}","look_lock":{"face":true,"body":true,"clothes":true,"colors":true}},
+   "roster":[ /* daftar karakter lengkap dgn warna hex & pakaian */ ],
+   "locations":[ /* daftar lokasi lengkap */ ],
+   "audio":{"mix_profile":"film","music_global":["..."],"sfx_global":["langkah_kaki","kicau_burung"]},
+   "scenes":[
+     {"id":"S001","durationSec":${secPerScene},"camera":{"frame":"...","lens":"28mm","movement":"...","composition":"rule_of_thirds"},"location_id":"loc_rumah_ari","characters":[{"ref":"char_ari","pose":"...","expression":"...","action":"..."}],"dialog":[{"ref":"char_ari","text":"..."}],"sfx":["..."],"music_cue":"...","notes":""}
+     // total ${scenes} scene
+   ]
+ },
+ "per_scene":[ /* salin scene satu-per-item */ ]
 }
-Wajib isi ${scenes} scene dan setiap scene bernilai ${secPerScene} detik.
-Pastikan roster/locations/IDs sama persis di semua scene.
-    `.trim()
+`.trim()
   }
 
   async function onGenerate(){
     try{
-      setLoading(true); setError(undefined); setOut(null)
-      const prompt = buildPrompt()
-      const data = await callGeminiStrict({ apiKey, model, prompt })
-      if (!data?.full || !Array.isArray(data?.per_scene)) {
-        throw new Error('Output tidak sesuai bentuk { full, per_scene }')
+      setLoading(true); setError(undefined); setOut(null); setModelUsed(''); setSwitchNote('')
+      const data = await callGeminiStrict({ apiKey, model, prompt: buildPrompt() }) as OutShape
+      if (!data?.full || !Array.isArray(data?.per_scene)) throw new Error('Output tidak sesuai bentuk { full, per_scene }')
+      setOut(data)
+      // baca meta attempt untuk indikator switch
+      const attempts = data.__meta?.attempts || []
+      if (attempts.length){
+        setModelUsed(attempts[attempts.length-1].modelTried)
+        const switched = attempts.find(a=>a.switched)
+        if (switched) setSwitchNote(`Model otomatis berpindah (${attempts.map(a=>a.modelTried).join(' → ')})${switched.reason ? ` karena ${switched.reason}`:''}`)
       }
-      setOut(data as OutShape)
     }catch(e:any){
       setError(e?.message || 'Unknown error')
     }finally{ setLoading(false) }
@@ -145,20 +102,22 @@ Pastikan roster/locations/IDs sama persis di semua scene.
       <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12}}>
         <div style={{fontWeight:900, letterSpacing:.3, fontSize:18}}>Story Controls</div>
         <div className="row">
+          {modelUsed && <span className="badge">Model: {modelUsed}</span>}
           <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
             {loading ? 'Generating…' : 'Generate'}
           </button>
         </div>
       </div>
+      {switchNote && <div className="note" style={{marginTop:6}}>⚠️ {switchNote}</div>}
 
       <div className="grid" style={{marginTop:12}}>
         <div>
           <div className="kv">
             <label>Gemini API Key</label>
-            <input type="text" placeholder="AIza..." value={apiKey} onChange={e=>saveKey(e.target.value)} />
+            <input type="text" placeholder="AIza..." value={apiKey} onChange={e=>{saveKey(e.target.value)}} />
             <small className="helper">Disimpan lokal (localStorage).</small>
 
-            <label>Model</label>
+            <label>Model awal</label>
             <input type="text" value={model} onChange={e=>setModel(e.target.value)} />
 
             <label>Judul</label>

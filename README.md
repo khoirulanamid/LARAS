@@ -1,13 +1,13 @@
-# LARAS Cinematic Pro (FIX)
+# LARAS Cinematic Pro (Auto-Fallback)
 
-- React + Vite + TypeScript
-- base path sudah diset `/LARAS/` untuk GitHub Pages
-- Engine prompt: konsistensi karakter & lokasi (design_id, seed, look_lock)
-- Output ganda: `full` (satu objek lengkap) & `per_scene` (dipisah per item)
-- Ekspor: tombol Copy & Download JSON
-- Client-only: panggil Gemini langsung dari browser (API Key disimpan di localStorage)
+- React + Vite + TS, siap GitHub Pages (`base: /LARAS/`)
+- Engine konsistensi (design_id, seed, look_lock)
+- Output ganda: **full** & **per_scene**
+- Ekspor: **Copy** / **Download**
+- **Auto-fallback model**: coba model awal → `gemini-1.5-flash` → `gemini-2.0-flash`
+- UI indikator model dipakai & jalur switch
 
-## Jalankan Lokal
+## Jalankan
 ```bash
 npm ci
 npm run dev
