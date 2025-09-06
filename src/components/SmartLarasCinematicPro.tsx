@@ -8,13 +8,21 @@ type OutShape = {
   __meta?: { attempts: { modelTried:string; switched?:boolean; reason?:string }[] }
 }
 
+const MODELS = [
+  'Auto (Semua Model)',
+  'gemini-1.5-pro',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.0-pro'
+]
+
 const copy = (t:string)=> navigator.clipboard.writeText(t)
 function download(name: string, data: any) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob); const a = document.createElement('a')
   a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
-
 async function downloadScenesNdjson(items: {name:string, data:any}[], file='per_scene.ndjson'){
   const nd = items.map(x=> JSON.stringify({ name:x.name, data:x.data })).join('\n')
   const blob = new Blob([nd], { type: 'application/x-ndjson' })
@@ -23,13 +31,13 @@ async function downloadScenesNdjson(items: {name:string, data:any}[], file='per_
 }
 
 export default function SmartLarasCinematicPro() {
-  // durasi per scene fixed 8 detik; model diset internal & disembunyikan
-  const HIDDEN_MODEL = 'gemini-1.5-pro'
-
+  // controls
   const [apiKey, setApiKey] = useState('')
   const [title, setTitle] = useState('Kartun Edukasi Anak')
   const [scenes, setScenes] = useState(20)
+  const [modelSel, setModelSel] = useState<string>('Auto (Semua Model)')
 
+  // ui states
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<'full'|'per'>('full')
   const [out, setOut] = useState<OutShape|null>(null)
@@ -50,59 +58,50 @@ KELUARKAN JSON SAJA (tanpa teks tambahan) dengan bentuk:
 
 Judul: "${title}"
 Jumlah scene: ${scenes}
-Durasi setiap scene: 8 (gunakan "durationSec": 8 di tiap scene)
+Durasi setiap scene: 8 (gunakan "durationSec": 8)
 
 WAJIB:
 - Scene pertama bertag "Intro".
 - Scene terakhir bertag "Outro".
-- Konsistensi keras: roster[].id & locations[].id dipakai ulang via "ref"/"location_id".
-- Visual karakter stabil (rambut, mata+pupil, kulit, baju[model+hex], celana/rok[model+hex], sepatu) — tidak berubah antar scene.
+- Konsistensi: roster[].id & locations[].id dipakai ulang via "ref"/"location_id".
+- Visual karakter stabil (rambut, mata+pupil, kulit, baju[model+hex], celana/rok[model+hex], sepatu).
 
-GAYA CERITA (lebih natural, tidak kaku):
-- Beat sinematik: setup → inciting incident → rising actions → midpoint → escalation → climax → resolution → outro.
-- Dialog alami & ringkas; humor halus ramah anak.
-- Show-don't-tell; ekspresi/gesture natural.
-- Kamera bervariasi (wide/close, pan/tilt/dolly/tracking), komposisi (rule_of_thirds/leading_lines), lensa 24–50mm.
-- Audio: musik ramah anak (fade saat dialog), SFX relevan.
+GAYA CERITA:
+- Beat: setup → inciting incident → rising actions → midpoint → escalation → climax → resolution → outro.
+- Dialog alami, show-don't-tell, kamera variatif (24–50mm), musik ramah anak & SFX relevan.
 
 BENTUK:
 {
-  "full": {
-    "version": "3.2",
-    "schema": "laras.story",
-    "consistency": {
-      "lock": true,
-      "design_id": "auto_simple",
-      "seed": "auto",
-      "look_lock": { "face": true, "body": true, "clothes": true, "colors": true }
-    },
-    "roster": [ /* daftar karakter + atribut visual lengkap (hex) */ ],
-    "locations": [ /* loc_rumah_1, loc_rumah_2, loc_sekolah, loc_taman, loc_jalan */ ],
-    "audio": { "mix_profile":"film", "music_global":["ramah_anak"], "sfx_global":["langkah_kaki","kicau_burung"] },
-    "scenes": [
-      { "id":"S001","tag":"Intro","durationSec":8, "location_id":"loc_rumah_1",
-        "camera":{"frame":"wide","lens":"28mm","movement":"slow_push_in","composition":"rule_of_thirds"},
-        "characters":[{"ref":"char_utama","pose":"...","expression":"...","action":"..."}],
-        "dialog":[{"ref":"char_utama","text":"..."}],
-        "sfx":["angin_sepoi"], "music_cue":"intro_warm", "notes":"perkenalan & hook" }
-      /* total ${scenes} scene; akhir = Outro */
-    ]
+  "full": { "version":"3.2","schema":"laras.story","consistency":{"lock":true,"design_id":"auto_simple","seed":"auto","look_lock":{"face":true,"body":true,"clothes":true,"colors":true}},
+    "roster":[/* karakter + atribut visual (hex) */],
+    "locations":[/* loc_rumah_1, loc_rumah_2, loc_sekolah, loc_taman, loc_jalan */],
+    "audio":{"mix_profile":"film","music_global":["ramah_anak"],"sfx_global":["langkah_kaki","kicau_burung"]},
+    "scenes":[{ "id":"S001","tag":"Intro","durationSec":8,"location_id":"loc_rumah_1",
+      "camera":{"frame":"wide","lens":"28mm","movement":"slow_push_in","composition":"rule_of_thirds"},
+      "characters":[{"ref":"char_utama","pose":"...","expression":"...","action":"..."}],
+      "dialog":[{"ref":"char_utama","text":"..."}],
+      "sfx":["angin_sepoi"],"music_cue":"intro_warm","notes":"perkenalan & hook"}]
   },
-  "per_scene": [ /* salin semua scene satu-per-objek, sama dengan 'scenes' */ ]
+  "per_scene":[/* salin semua scene satu-per-objek */]
 }
-
-WAJIBKAN:
-- Semua "durationSec" = 8.
-- Semua "characters[].ref" ada di "roster".
-- Semua "location_id" ada di "locations".
-- Id scene berurutan S001..S${String(scenes).padStart(3,'0')}
+WAJIBKAN: durationSec=8, ref ada di roster, location_id ada di locations, ID scene berurutan.
 `.trim()
   }
 
   async function onGenerate(){
     try{
       setLoading(true); setError(undefined); setOut(null); setCheck(null)
-      const data = await callGeminiStrict({ apiKey, model: HIDDEN_MODEL, prompt: buildPrompt() }) as OutShape
+      const pickedModel = (modelSel === 'Auto (Semua Model)') ? undefined : modelSel
+      const data = await callGeminiStrict({
+        apiKey,
+        model: pickedModel,
+        // jika user pilih Auto, biarkan chain default dari aiClient yang “lengkap”
+        prompt: buildPrompt(),
+        onSwitch: (from, to, reason) => {
+          // tampilkan toast popup setiap kali fallback
+          showToast(`Switch model: ${from} → ${to} (${reason})`)
+        }
+      }) as OutShape
       if (!data?.full || !Array.isArray(data?.per_scene)) throw new Error('Output tidak sesuai { full, per_scene }')
       setOut(data)
       setCheck(validateStory(data, scenes))
@@ -113,7 +112,7 @@ WAJIBKAN:
   }
 
   const fullText = out ? JSON.stringify(out.full, null, 2) : ''
-  const perText = out ? JSON.stringify(out.per_scene, null, 2) : ''
+  const perText  = out ? JSON.stringify(out.per_scene, null, 2) : ''
   const sceneFiles = (out?.per_scene || []).map((sc, i)=>({
     name: `${(sc?.id ?? `S${String(i+1).padStart(3,'0')}`)}.json`,
     data: sc
@@ -130,7 +129,7 @@ WAJIBKAN:
           <div className="kv">
             <label>Gemini API Key</label>
             <input type="text" placeholder="Tempel API Key di sini (AIza...)" value={apiKey} onChange={(e)=>saveKey(e.target.value)} />
-            <small className="helper">Disimpan lokal (localStorage). Jangan bagikan ke publik.</small>
+            <small className="helper">Disimpan lokal. Jangan bagikan.</small>
 
             <label>Judul</label>
             <input type="text" placeholder="Contoh: Kartun Edukasi Anak" spellCheck={false} value={title} onChange={(e)=>setTitle(e.target.value)} required />
@@ -138,12 +137,18 @@ WAJIBKAN:
             <label>Jumlah Scene</label>
             <input type="number" placeholder="20" inputMode="numeric" min={1} max={200} step={1} value={scenes} onChange={(e)=>setScenes(Number(e.target.value||1))} required />
 
-            <small className="helper">Durasi per-scene otomatis <b>8 detik</b>. Output: <b>FULL</b> & <b>PER-SCENE</b>.</small>
+            <label>Model</label>
+            <input list="models" placeholder="Auto (Semua Model)" value={modelSel} onChange={(e)=>setModelSel(e.target.value)} />
+            <datalist id="models">
+              {MODELS.map(m => <option key={m} value={m} />)}
+            </datalist>
+
+            <small className="helper">Durasi per-scene otomatis <b>8 detik</b>. Output: <b>FULL</b> & <b>PER-SCENE</b>. Auto fallback berjalan saat model gagal.</small>
           </div>
 
           <div className="row" style={{marginTop:14}}>
             <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
-              {loading && <span className="spinner" />} {loading ? 'Generating…' : 'Generate'}
+              {loading ? <><span className="spinner" /> Generating…</> : 'Generate'}
             </button>
           </div>
 
@@ -162,7 +167,7 @@ WAJIBKAN:
           )}
         </div>
 
-        {/* RIGHT: output (fixed height + scroll) */}
+        {/* RIGHT: output */}
         <div className="card">
           <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
             <div className="tabs">
