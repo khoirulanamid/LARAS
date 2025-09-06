@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { callGeminiStrict } from '../lib/aiClient'
 import { validateStory, type ValidationResult } from '../lib/validate'
-import './SmartLarasCinematicPro.css'
 
 type OutShape = {
   full: any
@@ -96,8 +95,10 @@ WAJIBKAN: durationSec=8, ref ada di roster, location_id ada di locations, ID sce
       const data = await callGeminiStrict({
         apiKey,
         model: pickedModel,
+        // jika user pilih Auto, biarkan chain default dari aiClient yang “lengkap”
         prompt: buildPrompt(),
         onSwitch: (from, to, reason) => {
+          // tampilkan toast popup setiap kali fallback
           showToast(`Switch model: ${from} → ${to} (${reason})`)
         }
       }) as OutShape

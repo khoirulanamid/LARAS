@@ -30,20 +30,19 @@ body{
   border:1px solid var(--edge); border-radius:18px; padding:16px;
   backdrop-filter:blur(10px); box-shadow:0 10px 30px rgba(0,0,0,.25)
 }
-.section-title{font-weight:900;letter-spacing:.3px;margin-bottom:10px;color:var(--accent);font-size:1.1rem}
+.section-title{font-weight:900;letter-spacing:.3px;margin-bottom:10px}
 
 /* form */
 .kv{display:grid;grid-template-columns:120px 1fr;gap:10px 12px;align-items:center}
-.kv label{color:var(--muted);font-size:13px;font-weight:500;}
-input[type="text"],input[type="number"],input[type="password"],select{
+.kv label{color:var(--muted);font-size:13px}
+input[type="text"],input[type="number"]{
   width:100%;background:var(--fg);color:var(--text);
-  border:1px solid var(--edge);border-radius:12px;padding:10px 12px;outline:none;
-  font-size:1rem;
+  border:1px solid var(--edge);border-radius:12px;padding:10px 12px;outline:none
 }
 input[type="number"]{appearance:textfield}
 .kv small.helper{color:var(--muted);grid-column:1 / -1; margin-top:-4px} /* helper full-row */
 
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.row{display:flex;gap:10px;flex-wrap:wrap}
 
 /* buttons + animations */
 .button{
@@ -70,17 +69,16 @@ input[type="number"]{appearance:textfield}
 .tabs{display:flex;gap:8px}
 .tab{padding:8px 12px;border-radius:10px;border:1px solid var(--edge);cursor:pointer;background:#0d1b28;color:#cdd7e3;font-weight:600;transition:transform .08s}
 .tab:hover{transform:translateY(-1px)}
-.tab.active{background:#142538;color:#fff;font-weight:700;}
+.tab.active{background:#142538}
 .output{
   background:#0a121a;border:1px dashed var(--edge);border-radius:12px;padding:12px;
   height:520px; overflow:auto; white-space:pre-wrap;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  color:#e6e8ee;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace
 }
 
 /* list per-scene */
 .list{margin-top:8px;max-height:260px;overflow:auto;border:1px solid var(--edge);border-radius:12px}
-.item{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--edge);padding:8px 10px;font-size:0.98em;}
+.item{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--edge);padding:8px 10px}
 .item:last-child{border-bottom:0}
 
 /* toast */
@@ -89,8 +87,6 @@ input[type="number"]{appearance:textfield}
   background:rgba(15,23,42,.9); color:#e2e8f0; border:1px solid var(--edge);
   padding:10px 12px; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.4);
   animation: toast-in .2s ease, toast-out .2s ease 2.2s forwards;
-  font-weight:500;
-  font-size:1.05em;
 }
 @keyframes toast-in{from{transform:translateY(-6px); opacity:0} to{transform:none; opacity:1}}
 @keyframes toast-out{to{transform:translateY(-6px); opacity:0}}
