@@ -13,7 +13,7 @@ export default function App() {
             </a>
           </div>
         </div>
-        <span className="badge">Precision Story Engine</span>
+        <span className="badge">Simple • Consistent • Pro</span>
       </div>
       <SmartLarasCinematicPro />
     </div>

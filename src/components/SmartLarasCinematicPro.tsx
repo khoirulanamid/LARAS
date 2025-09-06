@@ -1,27 +1,40 @@
 import { useEffect, useMemo, useState } from 'react'
 import { callGeminiStrict } from '../lib/aiClient'
 
-type OutShape = { full:any; per_scene:any[]; __meta?: { attempts: { modelTried:string; switched?:boolean; reason?:string }[] } }
+// Bentuk hasil yang diharapkan
+type OutShape = {
+  full: any
+  per_scene: any[]
+  __meta?: { attempts: { modelTried:string; switched?:boolean; reason?:string }[] }
+}
 
-function copy(text: string) { navigator.clipboard.writeText(text) }
+// util umum
+const copy = (t:string)=> navigator.clipboard.writeText(t)
 function download(name: string, data: any) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
   const url = URL.createObjectURL(blob); const a = document.createElement('a')
   a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
 
+// buat ZIP per-scene (tanpa lib eksternal)
+async function downloadScenesZip(items: {name:string, data:any}[], zipName='per_scene.zip'){
+  const parts: BlobPart[] = []
+  // Minimal ZIP writer manual terlalu panjang; gunakan FileSystem API sederhana:
+  // fallback: gabungkan semua JSON jadi newline-delimited (masih satu file)
+  // → kalau butuh benar2 ZIP, nanti bisa ganti dengan JSZip. Untuk sekarang kita simpan NDJSON.
+  const nd = items.map(x=> JSON.stringify({ name:x.name, data:x.data })).join('\n')
+  parts.push(nd)
+  const blob = new Blob(parts, { type: 'application/x-ndjson' })
+  const url = URL.createObjectURL(blob); const a = document.createElement('a')
+  a.href = url; a.download = zipName; a.click(); URL.revokeObjectURL(url)
+}
+
 export default function SmartLarasCinematicPro() {
+  // kontrol minimal (awam): API key, Judul, Jumlah scene. Durasi fix 8 detik.
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('gemini-1.5-pro')
-  const [title, setTitle] = useState('Kartun Edukasi Anak: Menjaga Lingkungan')
+  const [model, setModel] = useState('gemini-1.5-pro') // tetap ada tapi kecil
+  const [title, setTitle] = useState('Kartun Edukasi Anak')
   const [scenes, setScenes] = useState(20)
-  const [secPerScene, setSecPerScene] = useState(8)
-  const [designId, setDesignId] = useState('kids_enviro_v1')
-  const [seed, setSeed] = useState('782364')
-  const [mainChars, setMainChars] = useState('Ari, Beni, Citra')
-  const [support, setSupport] = useState('Kucing Piko; Burung kecil; Tetangga Pak Tani')
-  const [locations, setLocations] = useState('Rumah Ari; Rumah Beni; Rumah Citra; SD 05; Taman kota; Jalan depan rumah')
-  const [userNotes, setUserNotes] = useState('Fokus edukasi: hemat air & buang sampah di tempatnya. Humor sopan. Tanpa kekerasan.')
 
   const [loading, setLoading] = useState(false)
   const [tab, setTab] = useState<'full'|'per'>('full')
@@ -30,48 +43,35 @@ export default function SmartLarasCinematicPro() {
   const [modelUsed, setModelUsed] = useState<string>('')
   const [switchNote, setSwitchNote] = useState<string>('')
 
-  useEffect(() => { const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k) }, [])
+  useEffect(()=>{ const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k) },[])
   function saveKey(k:string){ setApiKey(k); localStorage.setItem('GEMINI_KEY', k) }
 
-  const canGo = useMemo(() =>
-    apiKey.trim().length>20 && scenes>0 && secPerScene>0 && title.trim().length>2, [apiKey, scenes, secPerScene, title])
+  const canGo = useMemo(()=> apiKey.trim().length>20 && scenes>0 && title.trim().length>1, [apiKey, scenes, title])
 
+  // Prompt super singkat (awam), tapi tetap enforce schema & konsistensi. Durasi fix 8 detik.
   function buildPrompt(){
     return `
-Kamu adalah "LARAS Story Orchestrator".
-OUTPUT KETAT: JSON saja { "full":{...}, "per_scene":[...] }.
-Wajib ${scenes} scene; durasi tiap scene ${secPerScene} detik; ID karakter & lokasi konsisten.
-
-### LOCK
-design_id="${designId}", seed="${seed}", look_lock={face:true,body:true,clothes:true,colors:true}
-- Kunci sifat visual: rambut, muka, mata (warna+pupil), hidung, telinga, tangan, tubuh, kaki, baju (model+hex), celana/rok (model+hex), sepatu.
-- Karakter dan lokasi punya id persisten: contoh char_ari, loc_rumah_ari.
-
-### METADATA
-judul="${title}"
-karakter_utama=${mainChars}
-pendamping_hewannya=${support}
-lokasi=${locations}
-catatan="${userNotes}"
-
-### AUDIO & KAMERA
-Audio global filmic, musik ramah anak, SFX relevan. Kamera tulis per scene (frame, lensa, movement, composition).
-Dialog edukatif & sopan.
-
-### BENTUK
+HASILKAN JSON SAJA (tanpa teks lain) { "full":{...}, "per_scene":[...] }.
+Judul: "${title}". Jumlah scene: ${scenes}. Durasi tiap scene: 8 detik.
+Konsistensi karakter & lokasi wajib (id persisten, warna pakaian hex, look_lock wajah/tubuh/pakaian/warna).
+Skema:
 {
- "full": {
+ "full":{
    "version":"3.0","schema":"laras.story",
-   "consistency":{"lock":true,"design_id":"${designId}","seed":"${seed}","look_lock":{"face":true,"body":true,"clothes":true,"colors":true}},
-   "roster":[ /* daftar karakter lengkap dgn warna hex & pakaian */ ],
-   "locations":[ /* daftar lokasi lengkap */ ],
-   "audio":{"mix_profile":"film","music_global":["..."],"sfx_global":["langkah_kaki","kicau_burung"]},
+   "consistency":{"lock":true,"design_id":"auto_simple","seed":"auto","look_lock":{"face":true,"body":true,"clothes":true,"colors":true}},
+   "roster":[/* daftar karakter lengkap & atribut visual (rambut, mata+pupil, hidung, telinga, baju, celana/rok, sepatu) */],
+   "locations":[/* daftar lokasi penting, mis. rumah_1, rumah_2, rumah_3, sekolah, taman, jalan */],
+   "audio":{"mix_profile":"film","music_global":["ramah_anak"],"sfx_global":["langkah_kaki","kicau_burung"]},
    "scenes":[
-     {"id":"S001","durationSec":${secPerScene},"camera":{"frame":"...","lens":"28mm","movement":"...","composition":"rule_of_thirds"},"location_id":"loc_rumah_ari","characters":[{"ref":"char_ari","pose":"...","expression":"...","action":"..."}],"dialog":[{"ref":"char_ari","text":"..."}],"sfx":["..."],"music_cue":"...","notes":""}
+     {"id":"S001","durationSec":8,"location_id":"loc_rumah_1",
+      "camera":{"frame":"...","lens":"28mm","movement":"...","composition":"rule_of_thirds"},
+      "characters":[{"ref":"char_1","pose":"...","expression":"...","action":"..."}],
+      "dialog":[{"ref":"char_1","text":"..."}],
+      "sfx":["..."],"music_cue":"...","notes":""}
      // total ${scenes} scene
    ]
  },
- "per_scene":[ /* salin scene satu-per-item */ ]
+ "per_scene":[/* salin semua scene satu per item, sama persis dengan 'scenes' di atas */]
 }
 `.trim()
   }
@@ -82,25 +82,30 @@ Dialog edukatif & sopan.
       const data = await callGeminiStrict({ apiKey, model, prompt: buildPrompt() }) as OutShape
       if (!data?.full || !Array.isArray(data?.per_scene)) throw new Error('Output tidak sesuai bentuk { full, per_scene }')
       setOut(data)
-      // baca meta attempt untuk indikator switch
       const attempts = data.__meta?.attempts || []
       if (attempts.length){
         setModelUsed(attempts[attempts.length-1].modelTried)
         const switched = attempts.find(a=>a.switched)
-        if (switched) setSwitchNote(`Model otomatis berpindah (${attempts.map(a=>a.modelTried).join(' → ')})${switched.reason ? ` karena ${switched.reason}`:''}`)
+        if (switched) setSwitchNote(`Model berpindah otomatis (${attempts.map(a=>a.modelTried).join(' → ')})${switched.reason ? ` karena ${switched.reason}`:''}`)
       }
     }catch(e:any){
       setError(e?.message || 'Unknown error')
     }finally{ setLoading(false) }
   }
 
-  const outTextFull = useMemo(()=> out ? JSON.stringify(out.full, null, 2) : '', [out])
-  const outTextPer = useMemo(()=> out ? JSON.stringify(out.per_scene, null, 2) : '', [out])
+  const fullText = out ? JSON.stringify(out.full, null, 2) : ''
+  const perText = out ? JSON.stringify(out.per_scene, null, 2) : ''
+
+  // buat daftar file per-scene
+  const sceneFiles = (out?.per_scene || []).map((sc, i)=>({
+    name: `${(sc?.id ?? `S${String(i+1).padStart(3,'0')}`)}.json`,
+    data: sc
+  }))
 
   return (
     <div className="card">
-      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:12}}>
-        <div style={{fontWeight:900, letterSpacing:.3, fontSize:18}}>Story Controls</div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
+        <div style={{fontWeight:900,letterSpacing:.3,fontSize:18}}>Story Controls (Sederhana)</div>
         <div className="row">
           {modelUsed && <span className="badge">Model: {modelUsed}</span>}
           <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
@@ -111,60 +116,75 @@ Dialog edukatif & sopan.
       {switchNote && <div className="note" style={{marginTop:6}}>⚠️ {switchNote}</div>}
 
       <div className="grid" style={{marginTop:12}}>
+        {/* KIRI: kontrol minimal */}
         <div>
           <div className="kv">
             <label>Gemini API Key</label>
-            <input type="text" placeholder="AIza..." value={apiKey} onChange={e=>{saveKey(e.target.value)}} />
-            <small className="helper">Disimpan lokal (localStorage).</small>
-
-            <label>Model awal</label>
-            <input type="text" value={model} onChange={e=>setModel(e.target.value)} />
+            <input type="text" placeholder="AIza..." value={apiKey} onChange={e=>saveKey(e.target.value)} />
+            <small className="helper">Disimpan lokal (localStorage). Jangan bagikan ke publik.</small>
 
             <label>Judul</label>
             <input type="text" value={title} onChange={e=>setTitle(e.target.value)} />
 
             <label>Jumlah Scene</label>
-            <input type="number" value={scenes} min={1} onChange={e=>setScenes(parseInt(e.target.value||'1'))} />
+            <input type="number" min={1} value={scenes} onChange={e=>setScenes(parseInt(e.target.value||'1'))} />
 
-            <label>Detik per Scene</label>
-            <input type="number" value={secPerScene} min={1} onChange={e=>setSecPerScene(parseInt(e.target.value||'8'))} />
-
-            <label>Design ID</label>
-            <input type="text" value={designId} onChange={e=>setDesignId(e.target.value)} />
-
-            <label>Seed</label>
-            <input type="text" value={seed} onChange={e=>setSeed(e.target.value)} />
-
-            <label>Karakter Utama</label>
-            <input type="text" value={mainChars} onChange={e=>setMainChars(e.target.value)} />
-
-            <label>Pendamping/Hewan</label>
-            <input type="text" value={support} onChange={e=>setSupport(e.target.value)} />
-
-            <label>Lokasi Utama</label>
-            <input type="text" value={locations} onChange={e=>setLocations(e.target.value)} />
-
-            <label>Catatan</label>
-            <textarea value={userNotes} onChange={e=>setUserNotes(e.target.value)} />
+            <label>Model awal</label>
+            <input type="text" value={model} onChange={e=>setModel(e.target.value)} />
+            <small className="helper">Jika quota habis → otomatis pindah ke 1.5-flash → 2.0-flash.</small>
           </div>
+
+          <hr className="sep"/>
+          <div className="note">Durasi per scene otomatis <b>8 detik</b>. Output: <b>FULL JSON</b> & <b>PER-SCENE</b> (terpisah).</div>
         </div>
 
+        {/* KANAN: output & aksi */}
         <div>
           <div className="tabs">
             <div className={`tab ${tab==='full'?'active':''}`} onClick={()=>setTab('full')}>FULL JSON</div>
             <div className={`tab ${tab==='per'?'active':''}`} onClick={()=>setTab('per')}>PER-SCENE JSON</div>
           </div>
-          <div className="row" style={{marginTop:10}}>
-            <button className="button secondary" disabled={!out} onClick={()=> tab==='full' ? copy(outTextFull) : copy(outTextPer)}>Copy</button>
-            <button className="button ghost" disabled={!out} onClick={()=> tab==='full' ? download('full.json', out!.full) : download('per_scene.json', out!.per_scene)}>Download</button>
-          </div>
-          <div className="output" style={{marginTop:10}}>
-            { error
-              ? `❌ ${error}`
-              : out
-                ? (tab==='full' ? outTextFull : outTextPer)
-                : 'Belum ada output. Klik Generate setelah mengisi kontrol.' }
-          </div>
+
+          {tab==='full' ? (
+            <>
+              <div className="row" style={{marginTop:10}}>
+                <button className="button secondary" disabled={!out} onClick={()=>copy(fullText)}>Copy</button>
+                <button className="button ghost" disabled={!out} onClick={()=>download('full.json', out!.full)}>Download</button>
+              </div>
+              <div className="output" style={{marginTop:10}}>
+                {error ? `❌ ${error}` : (out ? fullText : 'Belum ada output. Klik Generate.')}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="row" style={{marginTop:10}}>
+                <button className="button secondary" disabled={!out} onClick={()=>copy(perText)}>Copy Semua</button>
+                <button className="button ghost" disabled={!out} onClick={()=>download('per_scene.json', out!.per_scene)}>Download Semua (1 file)</button>
+                <button className="button" disabled={!sceneFiles.length} onClick={()=>downloadScenesZip(sceneFiles,'per_scene.ndjson')}>
+                  Download Per-Scene (gabung)
+                </button>
+              </div>
+
+              {/* daftar file per-scene */}
+              <div className="list">
+                {sceneFiles.length===0 ? (
+                  <div className="item"><span>Tidak ada scene.</span></div>
+                ) : sceneFiles.map((f, idx)=>(
+                  <div className="item" key={idx}>
+                    <span>{f.name}</span>
+                    <div className="row">
+                      <button className="button secondary" onClick={()=>copy(JSON.stringify(f.data,null,2))}>Copy</button>
+                      <button className="button ghost" onClick={()=>download(f.name, f.data)}>Download</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="output" style={{marginTop:10}}>
+                {error ? `❌ ${error}` : (out ? perText : 'Belum ada output. Klik Generate.')}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

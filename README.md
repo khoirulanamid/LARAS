@@ -1,11 +1,9 @@
-# LARAS Cinematic Pro (Auto-Fallback)
+# LARAS Cinematic Pro • Simple Mode
 
-- React + Vite + TS, siap GitHub Pages (`base: /LARAS/`)
-- Engine konsistensi (design_id, seed, look_lock)
-- Output ganda: **full** & **per_scene**
-- Ekspor: **Copy** / **Download**
-- **Auto-fallback model**: coba model awal → `gemini-1.5-flash` → `gemini-2.0-flash`
-- UI indikator model dipakai & jalur switch
+**Input awam:** Judul + Jumlah Scene.  
+Durasi per scene otomatis **8 detik**.  
+Output: **FULL JSON** & **PER-SCENE** (bisa download satu-satu).  
+Auto-fallback model: awal → `gemini-1.5-flash` → `gemini-2.0-flash`.
 
 ## Jalankan
 ```bash

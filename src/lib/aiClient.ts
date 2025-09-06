@@ -26,10 +26,7 @@ async function callModel(apiKey: string, model: string, prompt: string) {
 
   const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
   const t = await res.text()
-  if (!res.ok) {
-    // lempar objek agar pemanggil bisa mendeteksi 429
-    throw { status: res.status, text: t }
-  }
+  if (!res.ok) throw { status: res.status, text: t }
 
   let data: any; try { data = JSON.parse(t) } catch { throw new Error('Response bukan JSON') }
   const text = data?.candidates?.[0]?.content?.parts?.map((p:any)=>p?.text||'').join('') || ''
@@ -51,7 +48,6 @@ export async function callGeminiStrict({ apiKey, model, prompt }: Params){
     try {
       const result = await callModel(apiKey, m, prompt)
       attempts.push({ modelTried: m, switched: i>0, reason: attempts[i-1]?.reason })
-      // sisipkan metadata pemanggilan di hasil (non-standar, disimpan di __meta)
       return { ...result, __meta: { attempts } }
     } catch (e: any) {
       lastErr = e
@@ -59,7 +55,6 @@ export async function callGeminiStrict({ apiKey, model, prompt }: Params){
         attempts.push({ modelTried: m, switched: true, reason: "429 quota/rate limit" })
         continue
       }
-      // error non-429 → hentikan
       throw new Error(`Gemini error ${e?.status || ''}: ${e?.text || e}`)
     }
   }
