@@ -16,15 +16,10 @@ function download(name: string, data: any) {
   a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
 }
 
-// buat ZIP per-scene (tanpa lib eksternal)
-async function downloadScenesZip(items: {name:string, data:any}[], zipName='per_scene.zip'){
-  const parts: BlobPart[] = []
-  // Minimal ZIP writer manual terlalu panjang; gunakan FileSystem API sederhana:
-  // fallback: gabungkan semua JSON jadi newline-delimited (masih satu file)
-  // → kalau butuh benar2 ZIP, nanti bisa ganti dengan JSZip. Untuk sekarang kita simpan NDJSON.
+// buat NDJSON gabungan untuk semua scene
+async function downloadScenesZip(items: {name:string, data:any}[], zipName='per_scene.ndjson'){
   const nd = items.map(x=> JSON.stringify({ name:x.name, data:x.data })).join('\n')
-  parts.push(nd)
-  const blob = new Blob(parts, { type: 'application/x-ndjson' })
+  const blob = new Blob([nd], { type: 'application/x-ndjson' })
   const url = URL.createObjectURL(blob); const a = document.createElement('a')
   a.href = url; a.download = zipName; a.click(); URL.revokeObjectURL(url)
 }
@@ -32,7 +27,7 @@ async function downloadScenesZip(items: {name:string, data:any}[], zipName='per_
 export default function SmartLarasCinematicPro() {
   // kontrol minimal (awam): API key, Judul, Jumlah scene. Durasi fix 8 detik.
   const [apiKey, setApiKey] = useState('')
-  const [model, setModel] = useState('gemini-1.5-pro') // tetap ada tapi kecil
+  const [model, setModel] = useState('gemini-1.5-pro')
   const [title, setTitle] = useState('Kartun Edukasi Anak')
   const [scenes, setScenes] = useState(20)
 
@@ -48,19 +43,19 @@ export default function SmartLarasCinematicPro() {
 
   const canGo = useMemo(()=> apiKey.trim().length>20 && scenes>0 && title.trim().length>1, [apiKey, scenes, title])
 
-  // Prompt super singkat (awam), tapi tetap enforce schema & konsistensi. Durasi fix 8 detik.
+  // Prompt super singkat (awam), durasi fix 8 detik.
   function buildPrompt(){
     return `
-HASILKAN JSON SAJA (tanpa teks lain) { "full":{...}, "per_scene":[...] }.
+HASILKAN JSON SAJA { "full":{...}, "per_scene":[...] }.
 Judul: "${title}". Jumlah scene: ${scenes}. Durasi tiap scene: 8 detik.
-Konsistensi karakter & lokasi wajib (id persisten, warna pakaian hex, look_lock wajah/tubuh/pakaian/warna).
+Konsistensi karakter & lokasi wajib (warna pakaian hex, wajah/tubuh tetap).
 Skema:
 {
  "full":{
    "version":"3.0","schema":"laras.story",
    "consistency":{"lock":true,"design_id":"auto_simple","seed":"auto","look_lock":{"face":true,"body":true,"clothes":true,"colors":true}},
-   "roster":[/* daftar karakter lengkap & atribut visual (rambut, mata+pupil, hidung, telinga, baju, celana/rok, sepatu) */],
-   "locations":[/* daftar lokasi penting, mis. rumah_1, rumah_2, rumah_3, sekolah, taman, jalan */],
+   "roster":[/* daftar karakter & atribut visual */],
+   "locations":[/* lokasi: rumah, sekolah, taman */],
    "audio":{"mix_profile":"film","music_global":["ramah_anak"],"sfx_global":["langkah_kaki","kicau_burung"]},
    "scenes":[
      {"id":"S001","durationSec":8,"location_id":"loc_rumah_1",
@@ -68,10 +63,9 @@ Skema:
       "characters":[{"ref":"char_1","pose":"...","expression":"...","action":"..."}],
       "dialog":[{"ref":"char_1","text":"..."}],
       "sfx":["..."],"music_cue":"...","notes":""}
-     // total ${scenes} scene
    ]
  },
- "per_scene":[/* salin semua scene satu per item, sama persis dengan 'scenes' di atas */]
+ "per_scene":[/* semua scene dipisah satu per item */]
 }
 `.trim()
   }
@@ -95,8 +89,6 @@ Skema:
 
   const fullText = out ? JSON.stringify(out.full, null, 2) : ''
   const perText = out ? JSON.stringify(out.per_scene, null, 2) : ''
-
-  // buat daftar file per-scene
   const sceneFiles = (out?.per_scene || []).map((sc, i)=>({
     name: `${(sc?.id ?? `S${String(i+1).padStart(3,'0')}`)}.json`,
     data: sc
@@ -116,29 +108,52 @@ Skema:
       {switchNote && <div className="note" style={{marginTop:6}}>⚠️ {switchNote}</div>}
 
       <div className="grid" style={{marginTop:12}}>
-        {/* KIRI: kontrol minimal */}
-        <div>
-          <div className="kv">
-            <label>Gemini API Key</label>
-            <input type="text" placeholder="AIza..." value={apiKey} onChange={e=>saveKey(e.target.value)} />
-            <small className="helper">Disimpan lokal (localStorage). Jangan bagikan ke publik.</small>
+        {/* KIRI: kontrol */}
+        <div className="kv">
+          <label>Gemini API Key</label>
+          <input
+            type="text"
+            placeholder="Tempel API Key di sini (AIza...)"
+            value={apiKey}
+            onChange={(e)=>saveKey(e.target.value)}
+          />
+          <small className="helper">Disimpan lokal. Jangan bagikan.</small>
 
-            <label>Judul</label>
-            <input type="text" value={title} onChange={e=>setTitle(e.target.value)} />
+          <label>Judul</label>
+          <input
+            type="text"
+            placeholder="Contoh: Kartun Edukasi Anak"
+            spellCheck={false}
+            value={title}
+            onChange={(e)=>setTitle(e.target.value)}
+            required
+          />
 
-            <label>Jumlah Scene</label>
-            <input type="number" min={1} value={scenes} onChange={e=>setScenes(parseInt(e.target.value||'1'))} />
+          <label>Jumlah Scene</label>
+          <input
+            type="number"
+            placeholder="20"
+            inputMode="numeric"
+            min={1}
+            max={200}
+            step={1}
+            value={scenes}
+            onChange={(e)=>setScenes(Number(e.target.value || 1))}
+            required
+          />
+          <small className="helper">Durasi per-scene otomatis 8 detik.</small>
 
-            <label>Model awal</label>
-            <input type="text" value={model} onChange={e=>setModel(e.target.value)} />
-            <small className="helper">Jika quota habis → otomatis pindah ke 1.5-flash → 2.0-flash.</small>
-          </div>
-
-          <hr className="sep"/>
-          <div className="note">Durasi per scene otomatis <b>8 detik</b>. Output: <b>FULL JSON</b> & <b>PER-SCENE</b> (terpisah).</div>
+          <label>Model awal</label>
+          <input
+            type="text"
+            placeholder="gemini-1.5-pro"
+            value={model}
+            onChange={(e)=>setModel(e.target.value)}
+          />
+          <small className="helper">Jika quota habis → fallback ke 1.5-flash → 2.0-flash.</small>
         </div>
 
-        {/* KANAN: output & aksi */}
+        {/* KANAN: output */}
         <div>
           <div className="tabs">
             <div className={`tab ${tab==='full'?'active':''}`} onClick={()=>setTab('full')}>FULL JSON</div>
@@ -164,8 +179,6 @@ Skema:
                   Download Per-Scene (gabung)
                 </button>
               </div>
-
-              {/* daftar file per-scene */}
               <div className="list">
                 {sceneFiles.length===0 ? (
                   <div className="item"><span>Tidak ada scene.</span></div>
@@ -179,7 +192,6 @@ Skema:
                   </div>
                 ))}
               </div>
-
               <div className="output" style={{marginTop:10}}>
                 {error ? `❌ ${error}` : (out ? perText : 'Belum ada output. Klik Generate.')}
               </div>
