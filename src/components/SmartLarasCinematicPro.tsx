@@ -1,229 +1,290 @@
-import { useEffect, useMemo, useState } from 'react'
-import { callGeminiStrict } from '../lib/aiClient'
-import { validateStory, type ValidationResult } from '../lib/validate'
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { callGeminiAutoSwitch } from "../lib/aiClient";
+import { enrichFullWithBible } from "../lib/enricher";
+import { VISUAL_PRESETS, StyleProfile, styleHintFromPreset } from "../lib/presets";
+import { Storyboard } from "./Storyboard";
+import { downloadCsvFromScenes, openPrintableStoryboard } from "../lib/exporters";
 
-type OutShape = {
-  full: any
-  per_scene: any[]
-  __meta?: { attempts: { modelTried:string; switched?:boolean; reason?:string }[] }
-}
+interface OutShape { full?: any; per_scene?: any[] }
 
-const MODELS = [
-  'Auto (Semua Model)',
-  'gemini-1.5-pro',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.0-pro'
-]
+export default function SmartLarasCinematicPro(){
+  // state utama
+  const [apiKey, setApiKey] = useState("");
+  const [title, setTitle] = useState("");
+  const [scenes, setScenes] = useState<number>(8);
 
-const copy = (t:string)=> navigator.clipboard.writeText(t)
-function download(name: string, data: any) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob); const a = document.createElement('a')
-  a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url)
-}
-async function downloadScenesNdjson(items: {name:string, data:any}[], file='per_scene.ndjson'){
-  const nd = items.map(x=> JSON.stringify({ name:x.name, data:x.data })).join('\n')
-  const blob = new Blob([nd], { type: 'application/x-ndjson' })
-  const url = URL.createObjectURL(blob); const a = document.createElement('a')
-  a.href = url; a.download = file; a.click(); URL.revokeObjectURL(url)
-}
+  // style/preset
+  const [styleProfile, setStyleProfile] = useState<StyleProfile>("Pixar");
+  const [visualPresetKey, setVisualPresetKey] = useState<string>("pixar_bright_kids");
 
-export default function SmartLarasCinematicPro() {
-  // controls
-  const [apiKey, setApiKey] = useState('')
-  const [title, setTitle] = useState('Kartun Edukasi Anak')
-  const [scenes, setScenes] = useState(20)
-  const [modelSel, setModelSel] = useState<string>('Auto (Semua Model)')
+  // opsi cerita & konsistensi
+  const [presetCerita, setPresetCerita] = useState<"none"|"folklore_id"|"custom_pack">("folklore_id");
+  const [autoConsistency, setAutoConsistency] = useState(true);
 
-  // ui states
-  const [loading, setLoading] = useState(false)
-  const [tab, setTab] = useState<'full'|'per'>('full')
-  const [out, setOut] = useState<OutShape|null>(null)
-  const [error, setError] = useState<string|undefined>()
-  const [check, setCheck] = useState<ValidationResult|null>(null)
-  const [toast, setToast] = useState<string|undefined>()
+  // keluaran
+  const [out, setOut] = useState<OutShape>({});
+  const [loading, setLoading] = useState(false);
+  const [statusText, setStatusText] = useState("Ready");
 
-  useEffect(()=>{ const k = localStorage.getItem('GEMINI_KEY'); if (k) setApiKey(k) },[])
-  function saveKey(k:string){ setApiKey(k); localStorage.setItem('GEMINI_KEY', k) }
-  function showToast(msg:string){ setToast(msg); setTimeout(()=>setToast(undefined), 2400) }
+  const rippleRef = useRef<HTMLSpanElement|null>(null);
 
-  const canGo = useMemo(()=> apiKey.trim().length>20 && scenes>0 && title.trim().length>1, [apiKey, scenes, title])
+  // load key tersimpan
+  useEffect(()=>{ try{ const k=localStorage.getItem("LARAS_API_KEY"); if(k) setApiKey(k);}catch{} },[]);
+  function saveKey(v:string){ setApiKey(v); try{ localStorage.setItem("LARAS_API_KEY", v);}catch{} }
 
+  // bible konsistensi
+  function getBible(): string { try{ return localStorage.getItem("LARAS_BIBLE")||"" }catch{ return "" } }
+  function saveBible(full:any){ try{ const b=JSON.stringify({roster:full?.roster, consistency:full?.consistency}); localStorage.setItem("LARAS_BIBLE", b);}catch{} }
+
+  // bangun prompt
   function buildPrompt(){
-    return `
-KELUARKAN JSON SAJA (tanpa teks tambahan) dengan bentuk:
-{ "full": { ... }, "per_scene": [ ... ] }
+    const bible = getBible();
+    const vp = VISUAL_PRESETS[visualPresetKey];
+    const styleFromPreset = styleHintFromPreset(vp.style);
 
+    const folkloreHint = presetCerita === 'folklore_id'
+      ? `\nPILIHAN CERITA RAKYAT INDONESIA:
+- Malin Kundang: malin_kundang, ibu_malin, pedagang_kapal, awak_kapal, warga_pantai.
+  Lokasi: pelabuhan, dek kapal, rumah ibu, pantai berbatu. Emosi: penyesalan, amarah, sedih.`
+      : '';
+
+    const consistencyHint = autoConsistency
+      ? `\nWAJIBKAN KONSISTENSI LINTAS SCENE (Character Bible):
+- Roster ID stabil. Global design_id + seed + look_lock {face,body,clothes,colors}=true.
+- Detail super rinci (mata, rambut hingga helai, kulit, baju/warna HEX/jahitan, sepatu/sol),
+  juga suara (tone/tempo) & gerak (jalan/lari/gestur).`
+      : '';
+
+    const bibleHint = bible ? `\nGUNAKAN Character Bible lintas proyek:\n${bible}\n` : '';
+
+    return `
+KELUARKAN JSON SAJA (tanpa teks lain): { "full": { ... }, "per_scene": [ ... ] }
 Judul: "${title}"
 Jumlah scene: ${scenes}
-Durasi setiap scene: 8 (gunakan "durationSec": 8)
+Durasi/scene: 8 detik ("durationSec": 8)
 
-WAJIB:
-- Scene pertama bertag "Intro".
-- Scene terakhir bertag "Outro".
-- Konsistensi: roster[].id & locations[].id dipakai ulang via "ref"/"location_id".
-- Visual karakter stabil (rambut, mata+pupil, kulit, baju[model+hex], celana/rok[model+hex], sepatu).
+VISUAL PRESET:
+- name: ${vp.name}
+- style: ${vp.style}
+- palette: ${vp.palette.join(", ")}
+- lenses: ${vp.lenses.join(", ")}
+- lighting: ${vp.lighting}
+- camera_mood: ${vp.cameraMood}
 
-GAYA CERITA:
-- Beat: setup → inciting incident → rising actions → midpoint → escalation → climax → resolution → outro.
-- Dialog alami, show-don't-tell, kamera variatif (24–50mm), musik ramah anak & SFX relevan.
+${folkloreHint}
+${consistencyHint}
+${bibleHint}
 
-BENTUK:
-{
-  "full": { "version":"3.2","schema":"laras.story","consistency":{"lock":true,"design_id":"auto_simple","seed":"auto","look_lock":{"face":true,"body":true,"clothes":true,"colors":true}},
-    "roster":[/* karakter + atribut visual (hex) */],
-    "locations":[/* loc_rumah_1, loc_rumah_2, loc_sekolah, loc_taman, loc_jalan */],
-    "audio":{"mix_profile":"film","music_global":["ramah_anak"],"sfx_global":["langkah_kaki","kicau_burung"]},
-    "scenes":[{ "id":"S001","tag":"Intro","durationSec":8,"location_id":"loc_rumah_1",
-      "camera":{"frame":"wide","lens":"28mm","movement":"slow_push_in","composition":"rule_of_thirds"},
-      "characters":[{"ref":"char_utama","pose":"...","expression":"...","action":"..."}],
-      "dialog":[{"ref":"char_utama","text":"..."}],
-      "sfx":["angin_sepoi"],"music_cue":"intro_warm","notes":"perkenalan & hook"}]
-  },
-  "per_scene":[/* salin semua scene satu-per-objek */]
-}
-WAJIBKAN: durationSec=8, ref ada di roster, location_id ada di locations, ID scene berurutan.
-`.trim()
+PERSYARATAN:
+- Schema: {"version":"3.2","schema":"laras.story"}
+- global.style: ${styleFromPreset}. Palet warna konsisten episode (gunakan ${vp.palette.join(", ")}).
+- consistency: { lock:true, design_id:"story_${Date.now()}", seed:"stable_${String(scenes).padStart(3,'0')}", look_lock:{face:true,body:true,clothes:true,colors:true}}
+- roster lengkap (utama & pendamping) + locations + audio.
+- scenes panjang=${scenes} dengan id S001.., Scene1=Intro, SceneN=Outro.
+- scene berisi camera(lens ${vp.lenses.join("/")}, movement), characters(ref pose exp action), dialog, sfx, music_cue, notes.
+- per_scene: ringkas setiap scene, konsisten dengan full.scenes.`.trim();
   }
 
-  async function onGenerate(){
+  // generate naskah JSON
+  async function onGenerate(e?:React.MouseEvent){
+    if (!apiKey) return alert("Isi API key dulu");
+    if (!title) return alert("Isi Judul dulu");
+
+    setLoading(true); setStatusText("Preparing prompt…");
+    try {
+      const prompt = buildPrompt();
+      setStatusText("Contacting model… (auto-switch hidden)");
+      const data: OutShape = await callGeminiAutoSwitch(apiKey, prompt, (s)=>setStatusText(s));
+      // normalisasi durasi default 8 jika belum ada
+      if (Array.isArray(data?.full?.scenes)) {
+        data.full.scenes = data.full.scenes.map((s:any)=>({ durationSec: 8, ...s }));
+      }
+      setOut(data);
+      if (data?.full) saveBible(data.full);
+      setStatusText("Done ✅");
+    } catch (err:any){
+      console.error(err); setStatusText("Error"); alert(`Generate error: ${err?.message||err}`);
+    } finally { setLoading(false); }
+  }
+
+  // auto ide judul + jumlah scene
+  async function onAutoIdea(){
+    if (!apiKey) return alert("Isi API key dulu");
+    setLoading(true); setStatusText("Menyusun ide cerita…");
     try{
-      setLoading(true); setError(undefined); setOut(null); setCheck(null)
-      const pickedModel = (modelSel === 'Auto (Semua Model)') ? undefined : modelSel
-      const data = await callGeminiStrict({
-        apiKey,
-        model: pickedModel,
-        // jika user pilih Auto, biarkan chain default dari aiClient yang “lengkap”
-        prompt: buildPrompt(),
-        onSwitch: (from, to, reason) => {
-          // tampilkan toast popup setiap kali fallback
-          showToast(`Switch model: ${from} → ${to} (${reason})`)
-        }
-      }) as OutShape
-      if (!data?.full || !Array.isArray(data?.per_scene)) throw new Error('Output tidak sesuai { full, per_scene }')
-      setOut(data)
-      setCheck(validateStory(data, scenes))
-      showToast('Generated')
-    }catch(e:any){
-      setError(e?.message || 'Unknown error')
-    }finally{ setLoading(false) }
+      const vp = VISUAL_PRESETS[visualPresetKey];
+      const ideaPrompt = `
+Keluarkan JSON singkat: {"title": "...", "logline": "...", "scenes": 8..20}
+Tema: pendidikan anak, ramah keluarga. Gaya visual: ${vp.name} (${vp.style}).`;
+      const resp:any = await callGeminiAutoSwitch(apiKey, ideaPrompt, (s)=>setStatusText(s));
+      if (resp?.title) setTitle(resp.title);
+      if (resp?.scenes) setScenes(Math.max(2, Math.min(50, Number(resp.scenes)||8)));
+      setStatusText("Ide terpasang ✅");
+    }catch(e:any){ console.error(e); setStatusText("Gagal membuat ide"); alert(e?.message||e); }
+    finally{ setLoading(false); }
   }
 
-  const fullText = out ? JSON.stringify(out.full, null, 2) : ''
-  const perText  = out ? JSON.stringify(out.per_scene, null, 2) : ''
-  const sceneFiles = (out?.per_scene || []).map((sc, i)=>({
-    name: `${(sc?.id ?? `S${String(i+1).padStart(3,'0')}`)}.json`,
-    data: sc
-  }))
+  // enrich bible
+  async function onEnrich(){
+    if (!out?.full) return alert("Generate dulu agar ada FULL JSON.");
+    try {
+      setStatusText("Enriching Character Bible…");
+      const enriched = enrichFullWithBible(out.full, {
+        hairStrands: 1800, clothThreads: 2500, shoeStitches: 650,
+        seed: `enrich_${Date.now()}`, attachContinuityToScenes: true
+      });
+      const newOut = { ...out, full: enriched };
+      setOut(newOut);
+      downloadJson(`${safe(title)}_FULL_ENRICHED.json`, enriched);
+      setStatusText("Enriched ✅");
+    } catch(e:any){ console.error(e); alert(`Enrich error: ${e?.message||e}`); }
+  }
+
+  // util download
+  function downloadJson(name:string, obj:any){
+    const blob = new Blob([JSON.stringify(obj,null,2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=name.endsWith('.json')?name:`${name}.json`; a.click(); URL.revokeObjectURL(url);
+  }
+  function safe(s:string){ return (s||"story").replace(/\s+/g,'_').toLowerCase() }
+
+  // —— Storyboard handlers ——
+  function handleSceneDurationChange(sceneId:string, newDur:number){
+    if (!out?.full?.scenes) return;
+    const nf = { ...out.full, scenes: out.full.scenes.map((s:any)=> s.id===sceneId ? {...s, durationSec:newDur} : s ) };
+    setOut({ ...out, full: nf });
+  }
+  function handleReorderScenes(sourceId:string, targetId:string){
+    if (!out?.full?.scenes) return;
+    const arr = [...out.full.scenes];
+    const si = arr.findIndex((s:any)=>s.id===sourceId);
+    const ti = arr.findIndex((s:any)=>s.id===targetId);
+    if (si<0 || ti<0) return;
+    const [moved] = arr.splice(si,1);
+    arr.splice(ti,0,moved);
+    const nf = { ...out.full, scenes: arr };
+    setOut({ ...out, full: nf });
+  }
+
+  // ripple
+  function handleRipple(ev: React.MouseEvent){
+    const el = rippleRef.current; if (!el) return;
+    const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+    el.style.left = `${ev.clientX - rect.left}px`; el.style.top = `${ev.clientY - rect.top}px`;
+    el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+  }
+
+  // tombol export
+  function onExportCSV(){
+    if (!out?.full?.scenes) return alert("Belum ada scene.");
+    downloadCsvFromScenes(out.full.scenes, `${safe(title)}_scenes.csv`);
+  }
+  function onPrintStoryboard(){
+    if (!out?.full?.scenes) return alert("Belum ada scene.");
+    openPrintableStoryboard(title||"Storyboard", out.full.scenes);
+  }
+
+  const presetOptions = useMemo(()=>Object.entries(VISUAL_PRESETS),[]);
+  const currentPreset = VISUAL_PRESETS[visualPresetKey];
 
   return (
-    <>
-      {toast && <div className="toast">{toast}</div>}
+    <div className="laras-root fancy-scroll">
+      <div className="card rise">
+        <h2 className="title-pop">LARAS – Smart Cinematic Pro</h2>
+        <p className="muted">Storyboard • Drag&Drop • Per-scene Duration • Auto Idea • Visual Presets</p>
 
-      <div className="layout">
-        {/* LEFT: form sticky */}
-        <div className="left card">
-          <div className="section-title">Story Controls</div>
-          <div className="kv">
-            <label>Gemini API Key</label>
-            <input type="text" placeholder="Tempel API Key di sini (AIza...)" value={apiKey} onChange={(e)=>saveKey(e.target.value)} />
-            <small className="helper">Disimpan lokal. Jangan bagikan.</small>
-
-            <label>Judul</label>
-            <input type="text" placeholder="Contoh: Kartun Edukasi Anak" spellCheck={false} value={title} onChange={(e)=>setTitle(e.target.value)} required />
-
-            <label>Jumlah Scene</label>
-            <input type="number" placeholder="20" inputMode="numeric" min={1} max={200} step={1} value={scenes} onChange={(e)=>setScenes(Number(e.target.value||1))} required />
-
-            <label>Model</label>
-            <input list="models" placeholder="Auto (Semua Model)" value={modelSel} onChange={(e)=>setModelSel(e.target.value)} />
-            <datalist id="models">
-              {MODELS.map(m => <option key={m} value={m} />)}
-            </datalist>
-
-            <small className="helper">Durasi per-scene otomatis <b>8 detik</b>. Output: <b>FULL</b> & <b>PER-SCENE</b>. Auto fallback berjalan saat model gagal.</small>
+        {/* INPUT GRID */}
+        <div className="grid3">
+          <div className="field">
+            <label htmlFor="title">Judul</label>
+            <input id="title" className="input" value={title} onChange={e=>setTitle(e.target.value)} placeholder="Misal: Malin Kundang" />
+          </div>
+          <div className="field">
+            <label htmlFor="sceneCount">Jumlah Scene</label>
+            <input id="sceneCount" className="input" type="number" min={2} max={50} value={scenes} onChange={e=>setScenes(Math.max(2,Math.min(50, Number(e.target.value)||8)))} />
+          </div>
+          <div className="field">
+            <label htmlFor="style">Style</label>
+            <select id="style" value={styleProfile} onChange={e=>setStyleProfile(e.target.value as StyleProfile)} className="input">
+              <option value="2D">2D</option>
+              <option value="3D">3D</option>
+              <option value="Pixar">Pixar</option>
+              <option value="Marvel">Marvel</option>
+              <option value="Realistic">Realistic</option>
+              <option value="Anime">Anime</option>
+              <option value="Cartoon">Cartoon</option>
+            </select>
           </div>
 
-          <div className="row" style={{marginTop:14}}>
-            <button className="button" disabled={!canGo || loading} onClick={onGenerate}>
-              {loading ? <><span className="spinner" /> Generating…</> : 'Generate'}
-            </button>
+          <div className="field">
+            <label htmlFor="preset">Preset Visual (10+)</label>
+            <select id="preset" className="input" value={visualPresetKey} onChange={e=>setVisualPresetKey(e.target.value)}>
+              {presetOptions.map(([k,v])=>(
+                <option key={k} value={k}>{v.name}</option>
+              ))}
+            </select>
           </div>
 
-          {check && (
-            <div style={{marginTop:12}}>
-              <div className="section-title">Validation</div>
-              <div className="kv" style={{gridTemplateColumns:'1fr'}}>
-                <small className="helper" style={{marginTop:0}}>
-                  {check.ok ? '✅ Lolos pemeriksaan dasar.' : '⚠️ Ada catatan:'}
-                  <ul style={{marginTop:6}}>
-                    {check.messages.map((m,i)=>(<li key={i}>{m}</li>))}
-                  </ul>
-                </small>
-              </div>
+          <div className="field">
+            <label htmlFor="consistency">Auto Konsistensi</label>
+            <div className="switch">
+              <input id="consistency" type="checkbox" checked={autoConsistency} onChange={e=>setAutoConsistency(e.target.checked)} />
+              <label htmlFor="consistency"></label>
             </div>
-          )}
+          </div>
+
+          <div className="field">
+            <label htmlFor="key">Gemini API Key</label>
+            <input id="key" className="input" type="password" value={apiKey} onChange={e=>saveKey(e.target.value)} placeholder="AIza..." />
+          </div>
         </div>
 
-        {/* RIGHT: output */}
-        <div className="card">
-          <div className="row" style={{justifyContent:'space-between',alignItems:'center'}}>
-            <div className="tabs">
-              <div className={`tab ${tab==='full'?'active':''}`} onClick={()=>setTab('full')}>FULL JSON</div>
-              <div className={`tab ${tab==='per'?'active':''}`} onClick={()=>setTab('per')}>PER-SCENE JSON</div>
-            </div>
-            <div className="row">
-              {tab==='full' ? (
-                <>
-                  <button className="button secondary" disabled={!out}
-                    onClick={()=>{ copy(fullText); showToast('Copied FULL'); }}>Copy</button>
-                  <button className="button ghost" disabled={!out}
-                    onClick={()=>{ download('full.json', out!.full); showToast('Downloaded FULL'); }}>Download</button>
-                </>
-              ) : (
-                <>
-                  <button className="button secondary" disabled={!out}
-                    onClick={()=>{ copy(perText); showToast('Copied PER-SCENE'); }}>Copy Semua</button>
-                  <button className="button ghost" disabled={!out}
-                    onClick={()=>{ download('per_scene.json', out!.per_scene); showToast('Downloaded per_scene.json'); }}>Download Semua</button>
-                  <button className="button" disabled={!sceneFiles.length}
-                    onClick={()=>{ downloadScenesNdjson(sceneFiles); showToast('Downloaded per_scene.ndjson'); }}>
-                    Per-Scene (gabung)
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
+        {/* tombol aksi */}
+        <div className="btn-row">
+          <button className="btn" onClick={onAutoIdea} disabled={loading}>Auto Ide Cerita</button>
 
-          {tab==='per' && (
-            <div className="list">
-              {(sceneFiles.length===0) ? (
-                <div className="item"><span>Tidak ada scene.</span></div>
-              ) : sceneFiles.map((f, idx)=>(
-                <div className="item" key={idx}>
-                  <span>{f.name}</span>
-                  <div className="row">
-                    <button className="button secondary"
-                      onClick={()=>{ copy(JSON.stringify(f.data,null,2)); showToast(`Copied ${f.name}`) }}>Copy</button>
-                    <button className="button ghost"
-                      onClick={()=>{ download(f.name, f.data); showToast(`Downloaded ${f.name}`) }}>Download</button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <button className="btn primary ripple" onClick={(e)=>{handleRipple(e); onGenerate(e);}} disabled={loading}>
+            <span>{loading? 'Generating…' : 'Generate'}</span>
+            <span ref={rippleRef} className="ripple-span"/>
+          </button>
 
-          <div className="output" style={{marginTop:10}}>
-            { error
-              ? `❌ ${error}`
-              : out
-                ? (tab==='full' ? fullText : perText)
-                : 'Belum ada output. Klik Generate.' }
-          </div>
+          <button className="btn" disabled={!out?.full} onClick={()=>downloadJson(`${(title||"story").replace(/\s+/g,'_')}_FULL.json`, out.full)}>Download FULL</button>
+          <button className="btn" disabled={!out?.per_scene?.length} onClick={()=>downloadJson(`${(title||"story").replace(/\s+/g,'_')}_PER_SCENE.json`, out.per_scene)}>Download PER_SCENE</button>
+          <button className="btn warn" disabled={!out?.full} onClick={onEnrich}>Perkaya Character Bible</button>
+
+          <button className="btn" disabled={!out?.full?.scenes} onClick={onExportCSV}>Export CSV</button>
+          <button className="btn" disabled={!out?.full?.scenes} onClick={onPrintStoryboard}>Print/Storyboard</button>
+        </div>
+
+        <div className="status-bar">
+          <div className="dot"/><span>{statusText}</span>
+        </div>
+
+        {/* ringkas preset */}
+        <div className="preset-note">
+          <div><b>Preset:</b> {currentPreset.name}</div>
+          <div><b>Palette:</b> {currentPreset.palette.join(", ")}</div>
+          <div><b>Lenses:</b> {currentPreset.lenses.join(", ")}</div>
         </div>
       </div>
-    </>
-  )
+
+      {/* STORYBOARD VIEW */}
+      {Array.isArray(out?.full?.scenes) && (
+        <div className="card fade-in">
+          <h3>Storyboard</h3>
+          <Storyboard
+            scenes={out.full.scenes}
+            onReorder={handleReorderScenes}
+            onDurationChange={handleSceneDurationChange}
+          />
+        </div>
+      )}
+
+      {/* JSON preview tetap ada */}
+      <div className="card fade-in">
+        <h3>Output JSON</h3>
+        <pre className="pre">{JSON.stringify(out, null, 2)}</pre>
+      </div>
+    </div>
+  );
 }

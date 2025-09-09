@@ -1,85 +1,35 @@
-// aiClient.ts
-export type CallInfo = { modelTried: string; switched?: boolean; reason?: string }
-export type CallOpts = {
-  apiKey: string
-  model?: string            // model awal (opsional)
-  modelsChain?: string[]    // rantai fallback (opsional)
-  prompt: string
-  onSwitch?: (from: string, to: string, reason: string) => void
+export interface SwitchProgress { (status: string): void }
+
+async function postJSON(url: string, body: any, headers: Record<string,string>){
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type':'application/json', ...headers }, body: JSON.stringify(body) });
+  if (!res.ok){ const t = await res.text().catch(()=>res.statusText); throw new Error(`HTTP ${res.status}: ${t}`) }
+  return res.json();
 }
 
-function stripFence(s: string){ return s.replace(/```json|```/g, '').trim() }
-function robustParse(raw: string){
-  const t = raw.trim()
-  try { return JSON.parse(t) } catch {}
-  try { return JSON.parse(`{${t}}`) } catch {}
-  try { return JSON.parse(`[${t}]`) } catch {}
-  throw new Error('Gagal parse JSON dari model')
-}
+export async function callGeminiAutoSwitch(apiKey: string, prompt: string, progress?: SwitchProgress){
+  const candidates = [ 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash-latest', 'gemini-1.5-pro-latest' ];
+  const endpoint = (m:string)=>`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const headers = {} as Record<string,string>;
+  const bodyFor = (m:string)=>({ contents: [{ role:'user', parts:[{text: prompt}] }], generationConfig: { temperature: 0.6, topP: 0.9 } });
 
-async function callModel(apiKey: string, model: string, prompt: string) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`
-  const body = {
-    contents: [{ role:'user', parts:[{ text: prompt }] }],
-    safetySettings: [
-      { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-    ],
-    generationConfig: { temperature: 0.5, topK: 32, topP: 0.9, maxOutputTokens: 8192 }
-  }
-  const res = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })
-  const txt = await res.text()
-  if (!res.ok) throw { status: res.status, text: txt }
-  let data: any; try { data = JSON.parse(txt) } catch { throw new Error('Response bukan JSON') }
-  const text = data?.candidates?.[0]?.content?.parts?.map((p:any)=>p?.text||'').join('') || ''
-  if (!text) throw new Error('Teks kosong dari model')
-  const cleaned = stripFence(text)
-  try { return JSON.parse(cleaned) } catch { return robustParse(cleaned) }
-}
-
-/** Panggil Gemini dengan auto-fallback.
- *  Default chain lumayan lengkap; urutan dari "berkualitas → cepat".
- */
-export async function callGeminiStrict(opts: CallOpts){
-  const { apiKey, prompt, onSwitch } = opts
-  if (!apiKey || apiKey.length < 20) throw new Error('API key tidak valid')
-
-  const defaultChain = [
-    // kualitas tinggi → cepat
-    "gemini-1.5-pro",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-2.0-flash-lite",   // jika tersedia di akun
-    "gemini-1.0-pro"           // fallback lama
-  ]
-
-  // susun chain: model awal (jika ada) + chain custom (jika ada) + default, lalu dedup
-  const chain = Array.from(new Set([
-    ...(opts.model ? [opts.model] : []),
-    ...(opts.modelsChain || []),
-    ...defaultChain
-  ]))
-
-  const attempts: CallInfo[] = []
-  let lastErr: any
-
-  for (let i=0; i<chain.length; i++){
-    const m = chain[i]
-    try {
-      const result = await callModel(apiKey, m, prompt)
-      attempts.push({ modelTried: m, switched: i>0, reason: attempts[i-1]?.reason })
-      return { ...result, __meta: { attempts } }
-    } catch (e:any) {
-      lastErr = e
-      const reason = e?.status === 429 ? '429 quota/rate limit' : `err ${e?.status||''}`
-      if (i < chain.length-1) {
-        onSwitch?.(m, chain[i+1], reason) // ← beritahu UI untuk popup
-      }
-      attempts.push({ modelTried: m, switched: true, reason })
-      continue
+  let lastErr:any = null;
+  for (let i=0;i<candidates.length;i++){
+    const model = candidates[i];
+    try{
+      progress?.(`Trying ${model}…`);
+      const json = await postJSON(endpoint(model), bodyFor(model), headers);
+      const text = json?.candidates?.[0]?.content?.parts?.map((p:any)=>p?.text||'').join('') || '';
+      const parsed = safeJsonParse(text);
+      if (!parsed || typeof parsed !== 'object') throw new Error('Model did not return JSON');
+      progress?.(`Parsed JSON from ${model}`);
+      return parsed; // { full, per_scene } or idea JSON
+    }catch(err:any){
+      lastErr = err; progress?.(`Switching model… (${err?.message||err})`);
+      await sleep(300); continue;
     }
   }
-  throw new Error(`Semua model gagal. Error terakhir: ${lastErr?.text || lastErr}`)
+  throw lastErr || new Error('All models failed');
 }
+
+function safeJsonParse(s:string){ try{ return JSON.parse(s) }catch{ return null } }
+function sleep(ms:number){ return new Promise(r=>setTimeout(r, ms)) }
